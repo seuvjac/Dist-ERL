@@ -55,9 +55,9 @@ def main():
 
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(workers, times, 'o-', color='#D55E00', linewidth=2.5, markersize=8, label='Wall-clock to finish')
-    ax.set_xlabel('Number of Workers')
+    ax.set_xlabel('Number of Clients / Workers')
     ax.set_ylabel('Total Time (s)')
-    ax.set_title('Dist-ERL Scalability (Wall-clock)')
+    ax.set_title('FedEvoRL Scalability (Wall-clock)')
     ax.grid(True, alpha=0.3)
     ax2 = ax.twinx()
     ax2.plot(workers, speedup, 's--', color='#0072B2', linewidth=2, label='Speedup vs 1 worker')

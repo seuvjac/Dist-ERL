@@ -1,4 +1,4 @@
-"""Rollout Worker: Distributed evaluation worker for Dist-ERL."""
+"""Rollout Worker: Distributed evaluation worker for FedEvoRL baselines."""
 
 import ray
 import numpy as np

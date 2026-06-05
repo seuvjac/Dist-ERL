@@ -1,4 +1,4 @@
-"""Setup script for Dist-ERL."""
+"""Setup script for FedEvoRL."""
 
 from setuptools import setup, find_packages
 
@@ -9,14 +9,14 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
     requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
 
 setup(
-    name="dist-erl",
+    name="fed-evo-rl",
     version="0.1.0",
     author="Your Name",
     author_email="your.email@example.com",
-    description="Distributed Evolutionary Reinforcement Learning Framework",
+    description="Evolutionary Federated Reinforcement Learning Framework",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/dist-erl",
+    url="https://github.com/yourusername/fed-evo-rl",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     classifiers=[
@@ -49,7 +49,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "dist-erl=src.main:main",
+            "fed-evo-rl=src.main:main",
         ],
     },
 )

@@ -164,7 +164,7 @@ def plot_panel(ax, groups, order, title, xlabel, use_time=False):
     return True
 
 
-def significance_table(entries, out_path, baseline='standard_erl', target='dist_erl'):
+def significance_table(entries, out_path, baseline='standard_erl', target='fed_evo_rl'):
     rows = []
     b_runs = [e['y'][-1] for e in entries if e['mode'] == baseline]
     t_runs = [e['y'][-1] for e in entries if e['mode'] == target]
@@ -246,7 +246,7 @@ def main():
         nrows = (n + 1) // 2
         fig, axes = plt.subplots(nrows, ncols, figsize=(13, 5 * nrows))
         axes = np.atleast_2d(axes)
-        compare = ['pure_rl', 'standard_erl', 'erl_re2', 'dist_erl']
+        compare = ['pure_rl', 'standard_erl', 'erl_re2', 'dist_erl', 'fed_evo_rl']
         for idx, env_id in enumerate(env_ids):
             r, c = divmod(idx, ncols)
             sub = {}

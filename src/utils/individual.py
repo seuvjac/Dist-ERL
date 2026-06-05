@@ -1,4 +1,4 @@
-"""Data structures for Dist-ERL."""
+"""Data structures for FedEvoRL."""
 
 from dataclasses import dataclass
 import numpy as np

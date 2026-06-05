@@ -1,4 +1,4 @@
-"""Dist-ERL: Distributed Evolutionary Reinforcement Learning Framework."""
+"""FedEvoRL: Evolutionary Federated Reinforcement Learning Framework."""
 
 __version__ = "0.1.0"
 __author__ = "Your Name"

@@ -7,7 +7,7 @@ cd "$HOME/code/Dist-ERL"
 
 mkdir -p logs_compare
 
-for mode in pure_rl pure_ea dist_erl erl_re2; do
+for mode in pure_rl pure_ea dist_erl erl_re2 fed_evo_rl; do
   for seed in 0 1 2; do
     echo "RUN mode=${mode} seed=${seed}"
     python -m src.main \

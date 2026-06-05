@@ -1,5 +1,5 @@
 #!/bin/bash
-# Worker scalability + bandwidth logging for dist_erl
+# Client scalability + bandwidth logging for fed_evo_rl
 set -e
 
 ENV_NAME=${ENV_NAME:-"Ant-v2"}
@@ -9,11 +9,11 @@ GENS=${GENS:-80}
 for NW in 1 2 4 8; do
   EXP="scaling_${ENV_NAME}_w${NW}_s${SEED}"
   echo ">>> workers=$NW"
-  ./run_dist_erl.sh \
+  ./run_fed_evo_rl.sh \
     --env "$ENV_NAME" \
-    --mode dist_erl \
+    --mode fed_evo_rl \
     --exp-name "$EXP" \
-    --num-workers "$NW" \
+    --num-clients "$NW" \
     --population-size 40 \
     --max-generations "$GENS" \
     --seed "$SEED"

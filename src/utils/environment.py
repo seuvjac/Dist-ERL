@@ -1,4 +1,4 @@
-"""Environment utilities for Dist-ERL."""
+"""Environment utilities for FedEvoRL."""
 
 import os
 import warnings

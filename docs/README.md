@@ -1,23 +1,24 @@
-# Dist-ERL Documentation
+# FedEvoRL Documentation
 
 ## Project Direction
 
-Dist-ERL is now the paper method. New experiments should use:
+FedEvoRL is now the paper method. New experiments should use:
 
 ```bash
-./run_dist_erl.sh --mode dist_erl
+./run_fed_evo_rl.sh --mode fed_evo_rl
 ```
 
-The old distributed Re2 direction is abandoned. `erl_re2` remains available only as a single-worker baseline for comparison with ERL-Re2.
+The previous Dist-ERL direction is retained as a baseline (`dist_erl`). The old distributed Re2 direction is abandoned. `erl_re2` remains available only as a single-worker baseline.
 
 ## Main Components
 
 | Component | File | Role |
 |-----------|------|------|
-| EA Manager | `src/manager.py` | Maintains the EA population, elites, crossover, mutation, diversity boosts |
-| RL Learner | `src/learner.py` | Runs DDPG/TD3/PPO policy learning and replay-buffer updates |
-| Rollout Worker | `src/worker.py` | Evaluates individuals in parallel with Ray |
-| Training Loop | `src/main.py` | Coordinates EA evaluation/evolution, RL updates, logging, and plotting |
+| Federated Client | `src/federated.py` | Owns private environment, local replay buffer, local RL update, model upload |
+| EA Server | `src/manager.py` | Maintains policy population, selection, crossover, mutation, diversity |
+| Training Loop | `src/main.py` | Coordinates cross-client evaluation, federated aggregation, EA injection, logging |
+| Baseline Learner | `src/learner.py` | Supports pure RL / ERL / ERL-Re2 baselines |
+| Baseline Worker | `src/worker.py` | Supports distributed ERL baseline evaluation |
 
 ## Recommended Commands
 
@@ -25,12 +26,12 @@ The old distributed Re2 direction is abandoned. `erl_re2` remains available only
 cd ~/code/Dist-ERL
 
 # Quick smoke
-./run_dist_erl.sh --env Hopper-v2 --mode dist_erl --max-generations 10
+./run_fed_evo_rl.sh --env Pendulum-v1 --population-size 6 --num-clients 2 --max-generations 3
 
-# Paper-scale multi-seed comparison
+# Paper-scale comparison
 ./run_seeds.sh
 
-# Worker scaling and bandwidth
+# Client scaling and bandwidth
 ./run_scaling.sh
 python3 scripts/plot_scaling_bandwidth.py --log-dir logs
 
@@ -43,7 +44,7 @@ python3 generate_plots.py --log-dir logs --require-real
 Default paper comparison modes:
 
 ```text
-pure_rl pure_ea standard_erl erl_re2 dist_erl
+pure_rl pure_ea standard_erl erl_re2 dist_erl fed_evo_rl
 ```
 
-`dist_erl` is the final method. `erl_re2` is retained as a baseline, not as the project thesis.
+`fed_evo_rl` is the final method. `dist_erl` and `erl_re2` are retained as baselines, not as the project thesis.

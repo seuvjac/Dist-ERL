@@ -1,17 +1,19 @@
-"""Experiment modes and benchmark presets for Dist-ERL comparisons."""
+"""Experiment modes and benchmark presets for FedEvoRL comparisons."""
 
 # --- Training modes (baselines + full method) ---
 PURE_RL = 'pure_rl'
 PURE_EA = 'pure_ea'
 STANDARD_ERL = 'standard_erl'      # EA + RL, single-worker evaluation
-DIST_ERL = 'dist_erl'              # Main method: EA + RL, distributed evaluation
+DIST_ERL = 'dist_erl'              # EA + RL, distributed evaluation baseline
 ERL_RE2 = 'erl_re2'                # Re2 baseline: EA + RL + Re2, single-worker eval
+FED_EVO_RL = 'fed_evo_rl'          # Main method: EA-guided federated RL
 
 EA_MODES = (STANDARD_ERL, DIST_ERL, PURE_EA, ERL_RE2)
 RL_MODES = (PURE_RL, STANDARD_ERL, DIST_ERL, ERL_RE2)
 RE2_MODES = (ERL_RE2,)
+FEDERATED_MODES = (FED_EVO_RL,)
 
-ALL_MODES = (PURE_RL, PURE_EA, STANDARD_ERL, DIST_ERL, ERL_RE2)
+ALL_MODES = (PURE_RL, PURE_EA, STANDARD_ERL, DIST_ERL, ERL_RE2, FED_EVO_RL)
 
 # --- Ablation flags (only apply to RE2_MODES) ---
 ABLATION_FULL = 'full'
@@ -32,6 +34,7 @@ MODE_LABELS = {
     STANDARD_ERL: 'Standard ERL',
     DIST_ERL: 'Dist-ERL',
     ERL_RE2: 'ERL-Re2',
+    FED_EVO_RL: 'FedEvoRL (ours)',
 }
 
 MODE_COLORS = {
@@ -40,6 +43,7 @@ MODE_COLORS = {
     STANDARD_ERL: '#E69F00',
     DIST_ERL: '#56B4E9',
     ERL_RE2: '#CC79A7',
+    FED_EVO_RL: '#D55E00',
 }
 
 # High-contrast line styles for plots (colorblind-friendly tableau)
@@ -49,6 +53,7 @@ PLOT_STYLES = {
     STANDARD_ERL: {'color': '#E69F00', 'ls': '-.', 'lw': 2.5, 'marker': '^', 'markevery': 12},
     DIST_ERL: {'color': '#56B4E9', 'ls': ':', 'lw': 2.8, 'marker': 'D', 'markevery': 12},
     ERL_RE2: {'color': '#CC79A7', 'ls': '-', 'lw': 3.0, 'marker': 'v', 'markevery': 10},
+    FED_EVO_RL: {'color': '#D55E00', 'ls': '-', 'lw': 3.2, 'marker': '*', 'markevery': 10},
     f'{ERL_RE2}__{ABLATION_NO_RE2}': {'color': '#56B4E9', 'ls': ':', 'lw': 2.8},
     f'{ERL_RE2}__{ABLATION_NO_REPRODUCTION}': {'color': '#F0E442', 'ls': '--', 'lw': 2.8},
     f'{ERL_RE2}__{ABLATION_NO_MIGRATION}': {'color': '#999999', 'ls': '-.', 'lw': 2.8},
@@ -141,8 +146,8 @@ BENCHMARK_ENVS = [
 MUJOCO_ENVS = list(MUJOCO_V2_ENVS)
 DEFAULT_SEEDS = list(range(10))
 
-# Main comparison: related work / baselines, with Dist-ERL as the paper method
-BASELINE_MODES = [PURE_RL, PURE_EA, STANDARD_ERL, ERL_RE2, DIST_ERL]
+# Main comparison: related work / baselines, with FedEvoRL as the paper method
+BASELINE_MODES = [PURE_RL, PURE_EA, STANDARD_ERL, ERL_RE2, DIST_ERL, FED_EVO_RL]
 
 # Re2 mechanism ablation retained only for the ERL-Re2 baseline
 RE2_ABLATION_VARIANTS = [
@@ -153,7 +158,7 @@ RE2_ABLATION_VARIANTS = [
 ]
 
 # ERL family progression
-ERL_PROGRESSION_MODES = [STANDARD_ERL, ERL_RE2, DIST_ERL]
+ERL_PROGRESSION_MODES = [STANDARD_ERL, ERL_RE2, DIST_ERL, FED_EVO_RL]
 
 
 def uses_reproduction(mode: str, ablation: str) -> bool:

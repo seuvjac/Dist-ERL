@@ -1,4 +1,4 @@
-"""Population Based Training utilities for Dist-ERL."""
+"""Population Based Training utilities for FedEvoRL."""
 
 import numpy as np
 from typing import List, Dict, Any, Optional

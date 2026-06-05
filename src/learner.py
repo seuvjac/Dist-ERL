@@ -1,4 +1,4 @@
-"""RL Learner: Reinforcement Learning optimizer for Dist-ERL."""
+"""RL Learner: Reinforcement Learning optimizer for FedEvoRL baselines."""
 
 import ray
 import torch

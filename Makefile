@@ -37,7 +37,7 @@ clean:
 	find . -type d -name "__pycache__" -delete
 
 run:
-	./run_dist_erl.sh
+	./run_fed_evo_rl.sh
 
 docs:
 	@echo "Documentation available at: docs/README.md"

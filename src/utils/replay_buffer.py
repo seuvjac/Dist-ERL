@@ -1,4 +1,4 @@
-"""Hybrid Replay Buffer for Dist-ERL."""
+"""Hybrid Replay Buffer for FedEvoRL."""
 
 import numpy as np
 import random

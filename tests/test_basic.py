@@ -1,4 +1,4 @@
-"""Basic tests for Dist-ERL components."""
+"""Basic tests for FedEvoRL components."""
 
 import pytest
 import numpy as np

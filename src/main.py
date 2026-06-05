@@ -1,4 +1,4 @@
-"""Main entry point for Dist-ERL."""
+"""Main entry point for FedEvoRL / Dist-ERL baselines."""
 
 import argparse
 import csv
@@ -19,10 +19,12 @@ from src.config import (
     DIST_ERL,
     EA_MODES,
     ERL_RE2,
+    FED_EVO_RL,
     RE2_MODES,
     RL_MODES,
     STANDARD_ERL,
 )
+from src.federated import FederatedClient, aggregate_weight_dicts, weight_entropy
 from src.learner import RLLearner
 from src.manager import EAManager
 from src.sync_policy import MigrationGate
@@ -40,11 +42,13 @@ METRIC_FIELDS = [
     'stagnation_boost', 'rl_reset', 'migration_allowed', 'migration_gate',
     'eval_rl_aligned', 'ea_median_fitness', 'policy_exploration_noise',
     'federated_warm_start', 'migration_copies',
+    'client_reward_mean', 'client_reward_std', 'client_fitness_mean',
+    'client_fitness_std', 'selected_clients', 'aggregation_entropy',
 ]
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Dist-ERL: Distributed Evolutionary Reinforcement Learning")
+    parser = argparse.ArgumentParser(description="FedEvoRL: EA-guided Federated Reinforcement Learning")
 
     parser.add_argument('--env', type=str, default='LunarLanderContinuous-v3', help='Environment name')
     parser.add_argument('--max-episode-steps', type=int, default=1000, help='Maximum steps per episode')
@@ -59,6 +63,18 @@ def parse_args():
     parser.add_argument('--ea-prob-reset-and-super', type=float, default=0.05,
                         help='Prob of drastic / reset mutation (ERL-Re² prob_reset_and_sup)')
     parser.add_argument('--num-workers', type=int, default=4, help='Number of rollout workers')
+    parser.add_argument('--num-clients', type=int, default=4, help='Number of federated RL clients')
+    parser.add_argument('--client-fraction', type=float, default=1.0,
+                        help='Fraction of clients sampled in each federated round')
+    parser.add_argument('--client-rollouts', type=int, default=2,
+                        help='Local rollout episodes per selected federated client')
+    parser.add_argument('--client-updates', type=int, default=10,
+                        help='Local gradient updates per selected federated client')
+    parser.add_argument('--client-heterogeneity', type=float, default=0.2,
+                        help='Synthetic client MDP heterogeneity strength')
+    parser.add_argument('--fed-aggregation', type=str, default='fitness',
+                        choices=['fitness', 'uniform'],
+                        help='Federated aggregation rule for client model uploads')
     parser.add_argument('--algorithm', type=str, default='DDPG', choices=['DDPG', 'TD3', 'PPO'],
                         help='RL algorithm (default: DDPG)')
     parser.add_argument('--policy-exploration-noise', type=float, default=0.1,
@@ -105,15 +121,15 @@ def parse_args():
     parser.add_argument('--no-dynamic-migration', action='store_true',
                         help='Disable performance/warmup migration gate (always migrate on sync)')
 
-    parser.add_argument('--mode', type=str, default=DIST_ERL, choices=list(ALL_MODES),
-                        help='Training mode (Dist-ERL is the main method)')
+    parser.add_argument('--mode', type=str, default=FED_EVO_RL, choices=list(ALL_MODES),
+                        help='Training mode (FedEvoRL is the main method)')
     parser.add_argument('--ablation', type=str, default=ABLATION_FULL, choices=list(ABLATION_CHOICES),
                         help='Re2 ablation variant (erl_re2 only)')
 
     parser.add_argument('--log-dir', type=str, default='./logs', help='Log directory')
     parser.add_argument('--wandb', action='store_true', help='Use wandb logging')
     parser.add_argument('--wandb-key', type=str, default=None, help='Wandb API key')
-    parser.add_argument('--wandb-project', type=str, default='Dist-ERL', help='Wandb project name')
+    parser.add_argument('--wandb-project', type=str, default='FedEvoRL', help='Wandb project name')
     parser.add_argument('--exp-name', type=str, default=None, help='Experiment name')
 
     return parser.parse_args()
@@ -148,6 +164,12 @@ def _setup_local_logger(args):
         'rl_reset_patience': args.rl_reset_patience,
         'migration_warmup_frac': args.migration_warmup_frac,
         'policy_exploration_noise': args.policy_exploration_noise,
+        'num_clients': args.num_clients,
+        'client_fraction': args.client_fraction,
+        'client_rollouts': args.client_rollouts,
+        'client_updates': args.client_updates,
+        'client_heterogeneity': args.client_heterogeneity,
+        'fed_aggregation': args.fed_aggregation,
     }
     with open(os.path.join(run_dir, 'metadata.json'), 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
@@ -186,20 +208,168 @@ def _estimate_comm_bytes(population_size, state_dim, action_dim, max_episode_ste
     return int(upload), int(full_traj)
 
 
+def _run_fed_evo_rl(args, env_info, metrics_path):
+    """EA-guided federated RL training loop."""
+    if args.algorithm.upper() not in ('DDPG', 'TD3'):
+        raise ValueError("fed_evo_rl currently supports DDPG/TD3 deterministic actors")
+    ga_config = {
+        'mutation_prob': args.ea_mutation_prob,
+        'mutation_beta_frac': args.ea_mutation_beta_frac,
+        'prob_reset_and_super': args.ea_prob_reset_and_super,
+    }
+    manager = EAManager.remote(
+        args.population_size,
+        args.elite_fraction,
+        args.num_elitists,
+        ga_config,
+    )
+    template = build_model_template(
+        env_info['state_dim'], env_info['action_dim'], algorithm=args.algorithm)
+    ray.get(manager.initialize_population.remote(template))
+
+    clients = [
+        FederatedClient.remote(
+            client_id=i,
+            env_name=args.env,
+            algorithm=args.algorithm,
+            buffer_size=args.buffer_size,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            max_episode_steps=args.max_episode_steps,
+            heterogeneity=args.client_heterogeneity,
+            policy_exploration_noise=args.policy_exploration_noise,
+        )
+        for i in range(args.num_clients)
+    ]
+
+    start_time = time.time()
+    total_env_steps = 0
+    eval_reward_history = []
+    total_env_steps_history = []
+    rl_steps_history = []
+    selected_count = max(1, int(round(args.num_clients * np.clip(args.client_fraction, 0.0, 1.0))))
+
+    for generation in range(args.max_generations):
+        gen_start = time.time()
+        population = ray.get(manager.get_population_for_evaluation.remote())
+
+        eval_refs = []
+        eval_keys = []
+        for individual in population:
+            for client in clients:
+                eval_refs.append(client.evaluate_weights.remote(
+                    individual['weights'], int(individual['seed']), max(1, args.eval_episodes // 2)))
+                eval_keys.append(individual['id'])
+        eval_results = ray.get(eval_refs)
+
+        fitness_by_id = {individual['id']: [] for individual in population}
+        for ind_id, result in zip(eval_keys, eval_results):
+            fitness_by_id[ind_id].append(result['fitness'])
+        fitness_rows = [
+            {'id': ind_id, 'fitness': float(np.mean(values)) if values else 0.0}
+            for ind_id, values in fitness_by_id.items()
+        ]
+        ray.get(manager.update_fitness.remote(fitness_rows))
+        ray.get(manager.evolve_population.remote())
+
+        best = ray.get(manager.get_best_individual.remote())
+        client_indices = np.random.choice(
+            np.arange(args.num_clients), size=selected_count, replace=False)
+        train_refs = [
+            clients[int(idx)].local_train.remote(
+                best.weights, args.client_rollouts, args.client_updates,
+                args.seed + generation * 1000,
+            )
+            for idx in client_indices
+        ]
+        train_results = ray.get(train_refs)
+        client_rewards = [r['avg_reward'] for r in train_results]
+        client_weights = [r['weights'] for r in train_results]
+        aggregated = aggregate_weight_dicts(
+            client_weights, client_rewards, mode=args.fed_aggregation)
+        if aggregated:
+            inserted = ray.get(manager.inject_rl_individual.remote(
+                aggregated, args.inject_noise, args.migration_copies, args.migration_blend))
+        else:
+            inserted = 0
+
+        total_env_steps += (
+            len(population) * args.num_clients * args.max_episode_steps * max(1, args.eval_episodes // 2)
+            + selected_count * args.client_rollouts * args.max_episode_steps
+        )
+        stats = ray.get(manager.get_stats.remote())
+        upload_b, full_b = _estimate_comm_bytes(
+            args.population_size, env_info['state_dim'], env_info['action_dim'], args.max_episode_steps)
+        fed_upload = selected_count * sum(arr.nbytes for arr in aggregated.values()) if aggregated else 0
+
+        client_reward_mean = float(np.mean(client_rewards)) if client_rewards else 0.0
+        client_reward_std = float(np.std(client_rewards)) if client_rewards else 0.0
+        client_fitness_values = [r['fitness'] for r in eval_results]
+        eval_reward_history.append(client_reward_mean)
+        total_env_steps_history.append(total_env_steps)
+        rl_steps_history.append(int(sum(r.get('training_steps', 0) for r in train_results)))
+
+        log_data = {
+            'generation': generation,
+            'total_env_steps': total_env_steps,
+            'eval_reward_mean': client_reward_mean,
+            'eval_reward_std': client_reward_std,
+            'eval_ea_mean': stats['max_fitness'],
+            'best_fitness': stats['max_fitness'],
+            'mean_fitness': stats['mean_fitness'],
+            'fitness_std': stats.get('std_fitness', 0.0),
+            'weight_diversity': stats.get('weight_diversity', 0.0),
+            'rl_steps': rl_steps_history[-1],
+            'buffer_size': int(sum(r.get('buffer_size', 0) for r in train_results)),
+            'gen_time': time.time() - gen_start,
+            'total_time': time.time() - start_time,
+            'migrated': int(inserted > 0),
+            'migration_copies': inserted,
+            'comm_upload_bytes': upload_b + fed_upload,
+            'comm_full_traj_bytes': full_b,
+            'policy_exploration_noise': args.policy_exploration_noise,
+            'client_reward_mean': client_reward_mean,
+            'client_reward_std': client_reward_std,
+            'client_fitness_mean': float(np.mean(client_fitness_values)) if client_fitness_values else 0.0,
+            'client_fitness_std': float(np.std(client_fitness_values)) if client_fitness_values else 0.0,
+            'selected_clients': selected_count,
+            'aggregation_entropy': weight_entropy(client_rewards, mode=args.fed_aggregation),
+        }
+        _append_local_metrics(metrics_path, log_data)
+        _log(
+            f"Gen {generation}: fed_reward={client_reward_mean:.2f} +/- {client_reward_std:.2f}, "
+            f"ea_best={stats['max_fitness']:.2f}, diversity={stats.get('weight_diversity', 0.0):.3f}, "
+            f"clients={selected_count}/{args.num_clients}, agg={args.fed_aggregation}"
+        )
+        if args.wandb:
+            import wandb
+            wandb.log(log_data)
+
+    if eval_reward_history:
+        _generate_training_plot(
+            total_env_steps_history, eval_reward_history,
+            rl_steps_history or [0] * len(total_env_steps_history),
+            args.env, args.mode,
+        )
+
+
 def main():
     args = parse_args()
     apply_headless_mujoco_runtime()
     np.random.seed(args.seed)
-    args.num_workers = _cap_num_workers(args.num_workers, args.mode)
+    if args.mode == FED_EVO_RL:
+        args.num_clients = _cap_num_workers(args.num_clients, args.mode)
+    else:
+        args.num_workers = _cap_num_workers(args.num_workers, args.mode)
     ray.init(ignore_reinit_error=True, logging_level='warning')
 
-    _log("Starting Dist-ERL Training")
+    _log("Starting FedEvoRL Training")
     _log(f"  Environment: {args.env}")
     _log(f"  Mode: {args.mode}")
     _log(f"  MUJOCO_GL={os.environ.get('MUJOCO_GL', '?')}")
     if args.mode in RE2_MODES:
         _log(f"  Ablation: {args.ablation}")
-    _log(f"  Population: {args.population_size}, Workers: {args.num_workers}")
+    _log(f"  Population: {args.population_size}, Workers: {args.num_workers}, Clients: {args.num_clients}")
     _log(f"  RL algorithm: {args.algorithm}")
     _log(f"  Sync interval: {args.sync_interval}, Elite seeds: {args.elite_seeds}")
 
@@ -226,6 +396,13 @@ def main():
         except Exception as e:
             print(f"  Wandb failed: {e}")
             args.wandb = False
+
+    if args.mode == FED_EVO_RL:
+        _run_fed_evo_rl(args, env_info, metrics_path)
+        _log("Training completed.")
+        _log(f"Metrics saved to: {run_dir}")
+        ray.shutdown()
+        return
 
     manager = None
     learner = None

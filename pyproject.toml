@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dist-erl"
+name = "fed-evo-rl"
 version = "0.1.0"
-description = "Distributed Evolutionary Reinforcement Learning Framework"
+description = "Evolutionary Federated Reinforcement Learning Framework"
 authors = [
     {name = "Your Name", email = "your.email@example.com"},
 ]
@@ -55,7 +55,7 @@ docs = [
 ]
 
 [project.scripts]
-dist-erl = "src.main:main"
+fed-evo-rl = "src.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -1,4 +1,4 @@
-"""RL Policy implementations for Dist-ERL."""
+"""RL Policy implementations for FedEvoRL."""
 
 import torch
 import torch.nn as nn

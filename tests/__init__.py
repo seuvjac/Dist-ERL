@@ -1,1 +1,1 @@
-"""Tests for Dist-ERL."""
+"""Tests for FedEvoRL."""

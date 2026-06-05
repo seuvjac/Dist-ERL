@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 export PYTHONPATH="$(pwd):$PYTHONPATH"
 
 SEED=${SEED:-42}
-MODES=${MODES:-"dist_erl erl_re2 standard_erl pure_rl pure_ea"}
+MODES=${MODES:-"fed_evo_rl dist_erl erl_re2 standard_erl pure_rl pure_ea"}
 
 echo "Multi-environment MuJoCo-v2 benchmark, seed=$SEED"
 echo "Modes: $MODES"
@@ -28,6 +28,7 @@ print(p['population_size'], p['num_workers'], p['max_generations'], p['max_episo
       pure_ea) EXTRA=(--num-workers 2) ;;
       standard_erl|erl_re2) EXTRA=(--population-size "$POP" --num-workers 1) ;;
       dist_erl) EXTRA=(--population-size "$POP" --num-workers "$NW") ;;
+      fed_evo_rl) EXTRA=(--population-size "$POP" --num-clients "$NW" --client-fraction 1.0) ;;
     esac
 
     ./run_dist_erl.sh \

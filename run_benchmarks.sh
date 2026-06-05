@@ -1,5 +1,5 @@
 #!/bin/bash
-# Dist-ERL benchmark: baselines + ERL-Re2 comparison + Dist-ERL main method
+# FedEvoRL benchmark: baselines + ERL-Re2 + Dist-ERL + FedEvoRL main method
 set -e
 
 ENV_NAME=${ENV_NAME:-"LunarLanderContinuous-v3"}
@@ -31,6 +31,7 @@ run_experiment "pure_ea" "bench_${ENV_SLUG}_pure_ea" --num-workers 2
 run_experiment "standard_erl" "bench_${ENV_SLUG}_standard_erl" --num-workers 1
 run_experiment "erl_re2" "bench_${ENV_SLUG}_erl_re2" --num-workers 1
 run_experiment "dist_erl" "bench_${ENV_SLUG}_dist_erl" --num-workers 4
+run_experiment "fed_evo_rl" "bench_${ENV_SLUG}_fed_evo_rl" --num-clients 4 --client-fraction 1.0
 
 echo "Benchmarks completed."
 echo "  python3 generate_plots.py --log-dir logs --env $ENV_NAME"
