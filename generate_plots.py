@@ -29,6 +29,9 @@ ERL_PROGRESSION_MODES = _cfg.ERL_PROGRESSION_MODES
 MODE_LABELS = _cfg.MODE_LABELS
 PLOT_STYLES = _cfg.PLOT_STYLES
 RE2_ABLATION_VARIANTS = _cfg.RE2_ABLATION_VARIANTS
+FED_ABLATION_VARIANTS = _cfg.FED_ABLATION_VARIANTS
+FED_ABLATION_FULL = _cfg.FED_ABLATION_FULL
+FED_EVO_RL = _cfg.FED_EVO_RL
 BENCHMARK_ENVS = _cfg.BENCHMARK_ENVS
 effective_mode_label = _cfg.effective_mode_label
 
@@ -92,8 +95,16 @@ def load_entries(log_dir, metric, env_filter=None):
             continue
         mode = meta.get('mode', d.name.split('_')[0])
         abl = meta.get('ablation', 'n/a')
-        key = f"{mode}__{abl}" if mode == 'erl_re2' and abl not in ('n/a', 'full') else mode
-        label = effective_mode_label(mode, abl) if '__' in key else MODE_LABELS.get(mode, mode)
+        fed_abl = meta.get('fed_ablation', 'n/a')
+        if mode == 'erl_re2' and abl not in ('n/a', 'full'):
+            key = f"{mode}__{abl}"
+            label = effective_mode_label(mode, abl)
+        elif mode == FED_EVO_RL and fed_abl not in ('n/a', FED_ABLATION_FULL):
+            key = f"{mode}__{fed_abl}"
+            label = effective_mode_label(mode, fed_abl)
+        else:
+            key = mode
+            label = effective_mode_label(mode, FED_ABLATION_FULL) if mode == FED_EVO_RL else MODE_LABELS.get(mode, mode)
         seed = meta.get('seed')
         entries.append({
             'key': key, 'label': label, 'mode': mode, 'seed': seed,
@@ -235,6 +246,23 @@ def main():
             fig.savefig(out / 'ablation_re2_impact.png', dpi=300, bbox_inches='tight')
             paths.append(out / 'ablation_re2_impact.png')
         plt.close(fig)
+
+    fed_abl_order = []
+    if FED_EVO_RL in groups:
+        fed_abl_order.append(FED_EVO_RL)
+    for abl, _ in FED_ABLATION_VARIANTS:
+        k = f'{FED_EVO_RL}__{abl}'
+        if k in groups:
+            fed_abl_order.append(k)
+    if len(fed_abl_order) >= 4:
+        fig, ax = plt.subplots(figsize=(11, 6.5))
+        if plot_panel(ax, groups, fed_abl_order, 'FedEvoRL Ablation',
+                      'Total Environment Steps'):
+            fig.savefig(out / 'ablation_fed_evo_rl.png', dpi=300, bbox_inches='tight')
+            paths.append(out / 'ablation_fed_evo_rl.png')
+        plt.close(fig)
+    elif fed_abl_order:
+        print(f'WARNING: Only {len(fed_abl_order)} FedEvoRL ablation curves found (need >=4).')
 
     by_env = {}
     for e in entries:

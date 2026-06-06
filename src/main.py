@@ -19,6 +19,12 @@ from src.config import (
     DIST_ERL,
     EA_MODES,
     ERL_RE2,
+    FED_ABLATION_CHOICES,
+    FED_ABLATION_FULL,
+    FED_ABLATION_NO_EA_INJECTION,
+    FED_ABLATION_NO_HETEROGENEITY,
+    FED_ABLATION_NO_LOCAL_RL,
+    FED_ABLATION_UNIFORM_AGG,
     FED_EVO_RL,
     RE2_MODES,
     RL_MODES,
@@ -125,6 +131,9 @@ def parse_args():
                         help='Training mode (FedEvoRL is the main method)')
     parser.add_argument('--ablation', type=str, default=ABLATION_FULL, choices=list(ABLATION_CHOICES),
                         help='Re2 ablation variant (erl_re2 only)')
+    parser.add_argument('--fed-ablation', type=str, default=FED_ABLATION_FULL,
+                        choices=list(FED_ABLATION_CHOICES),
+                        help='FedEvoRL ablation variant (fed_evo_rl only)')
 
     parser.add_argument('--log-dir', type=str, default='./logs', help='Log directory')
     parser.add_argument('--wandb', action='store_true', help='Use wandb logging')
@@ -145,6 +154,7 @@ def _setup_local_logger(args):
     metadata = {
         'mode': args.mode,
         'ablation': args.ablation if args.mode in RE2_MODES else 'n/a',
+        'fed_ablation': args.fed_ablation if args.mode == FED_EVO_RL else 'n/a',
         'env': args.env,
         'algorithm': args.algorithm,
         'seed': args.seed,
@@ -206,6 +216,20 @@ def _estimate_comm_bytes(population_size, state_dim, action_dim, max_episode_ste
     upload = population_size * (4 + 4)  # seed + fitness
     full_traj = population_size * max_episode_steps * (state_dim + action_dim + 4) * 4
     return int(upload), int(full_traj)
+
+
+def _apply_fed_ablation_args(args) -> None:
+    """Translate named FedEvoRL ablations into concrete CLI settings."""
+    if args.mode != FED_EVO_RL:
+        return
+    if args.fed_ablation == FED_ABLATION_UNIFORM_AGG:
+        args.fed_aggregation = 'uniform'
+    elif args.fed_ablation == FED_ABLATION_NO_LOCAL_RL:
+        args.client_updates = 0
+    elif args.fed_ablation == FED_ABLATION_NO_EA_INJECTION:
+        args.migration_copies = 0
+    elif args.fed_ablation == FED_ABLATION_NO_HETEROGENEITY:
+        args.client_heterogeneity = 0.0
 
 
 def _run_fed_evo_rl(args, env_info, metrics_path):
@@ -287,7 +311,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         client_weights = [r['weights'] for r in train_results]
         aggregated = aggregate_weight_dicts(
             client_weights, client_rewards, mode=args.fed_aggregation)
-        if aggregated:
+        if aggregated and args.migration_copies > 0:
             inserted = ray.get(manager.inject_rl_individual.remote(
                 aggregated, args.inject_noise, args.migration_copies, args.migration_blend))
         else:
@@ -355,6 +379,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
 
 def main():
     args = parse_args()
+    _apply_fed_ablation_args(args)
     apply_headless_mujoco_runtime()
     np.random.seed(args.seed)
     if args.mode == FED_EVO_RL:
@@ -369,6 +394,8 @@ def main():
     _log(f"  MUJOCO_GL={os.environ.get('MUJOCO_GL', '?')}")
     if args.mode in RE2_MODES:
         _log(f"  Ablation: {args.ablation}")
+    if args.mode == FED_EVO_RL:
+        _log(f"  Fed ablation: {args.fed_ablation}")
     _log(f"  Population: {args.population_size}, Workers: {args.num_workers}, Clients: {args.num_clients}")
     _log(f"  RL algorithm: {args.algorithm}")
     _log(f"  Sync interval: {args.sync_interval}, Elite seeds: {args.elite_seeds}")

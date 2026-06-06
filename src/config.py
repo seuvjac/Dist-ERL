@@ -28,6 +28,21 @@ ABLATION_CHOICES = (
     ABLATION_NO_RE2,
 )
 
+# FedEvoRL ablations used to isolate the main method components.
+FED_ABLATION_FULL = 'full'
+FED_ABLATION_UNIFORM_AGG = 'uniform_aggregation'
+FED_ABLATION_NO_LOCAL_RL = 'no_local_rl'
+FED_ABLATION_NO_EA_INJECTION = 'no_ea_injection'
+FED_ABLATION_NO_HETEROGENEITY = 'no_heterogeneity'
+
+FED_ABLATION_CHOICES = (
+    FED_ABLATION_FULL,
+    FED_ABLATION_UNIFORM_AGG,
+    FED_ABLATION_NO_LOCAL_RL,
+    FED_ABLATION_NO_EA_INJECTION,
+    FED_ABLATION_NO_HETEROGENEITY,
+)
+
 MODE_LABELS = {
     PURE_RL: 'Pure RL (DDPG/TD3)',
     PURE_EA: 'Pure EA (ERL-Re² GA)',
@@ -35,6 +50,14 @@ MODE_LABELS = {
     DIST_ERL: 'Dist-ERL',
     ERL_RE2: 'ERL-Re2',
     FED_EVO_RL: 'FedEvoRL (ours)',
+}
+
+FED_ABLATION_LABELS = {
+    FED_ABLATION_FULL: 'FedEvoRL (full)',
+    FED_ABLATION_UNIFORM_AGG: 'w/o fitness aggregation',
+    FED_ABLATION_NO_LOCAL_RL: 'w/o local RL updates',
+    FED_ABLATION_NO_EA_INJECTION: 'w/o EA injection',
+    FED_ABLATION_NO_HETEROGENEITY: 'IID clients',
 }
 
 MODE_COLORS = {
@@ -58,6 +81,11 @@ PLOT_STYLES = {
     f'{ERL_RE2}__{ABLATION_NO_REPRODUCTION}': {'color': '#F0E442', 'ls': '--', 'lw': 2.8},
     f'{ERL_RE2}__{ABLATION_NO_MIGRATION}': {'color': '#999999', 'ls': '-.', 'lw': 2.8},
     f'{ERL_RE2}__{ABLATION_FULL}': {'color': '#CC79A7', 'ls': '-', 'lw': 3.0},
+    f'{FED_EVO_RL}__{FED_ABLATION_FULL}': {'color': '#D55E00', 'ls': '-', 'lw': 3.2, 'marker': '*', 'markevery': 10},
+    f'{FED_EVO_RL}__{FED_ABLATION_UNIFORM_AGG}': {'color': '#0072B2', 'ls': '--', 'lw': 2.8, 'marker': 'o', 'markevery': 10},
+    f'{FED_EVO_RL}__{FED_ABLATION_NO_LOCAL_RL}': {'color': '#009E73', 'ls': '-.', 'lw': 2.8, 'marker': 's', 'markevery': 10},
+    f'{FED_EVO_RL}__{FED_ABLATION_NO_EA_INJECTION}': {'color': '#E69F00', 'ls': ':', 'lw': 3.0, 'marker': '^', 'markevery': 10},
+    f'{FED_EVO_RL}__{FED_ABLATION_NO_HETEROGENEITY}': {'color': '#CC79A7', 'ls': '-', 'lw': 2.8, 'marker': 'D', 'markevery': 10},
 }
 
 # Six MuJoCo continuous control tasks (Todorov et al., 2012), Gymnasium *-v2 IDs
@@ -157,6 +185,14 @@ RE2_ABLATION_VARIANTS = [
     (ABLATION_FULL, 'ERL-Re2 (full)'),
 ]
 
+FED_ABLATION_VARIANTS = [
+    (FED_ABLATION_FULL, FED_ABLATION_LABELS[FED_ABLATION_FULL]),
+    (FED_ABLATION_UNIFORM_AGG, FED_ABLATION_LABELS[FED_ABLATION_UNIFORM_AGG]),
+    (FED_ABLATION_NO_LOCAL_RL, FED_ABLATION_LABELS[FED_ABLATION_NO_LOCAL_RL]),
+    (FED_ABLATION_NO_EA_INJECTION, FED_ABLATION_LABELS[FED_ABLATION_NO_EA_INJECTION]),
+    (FED_ABLATION_NO_HETEROGENEITY, FED_ABLATION_LABELS[FED_ABLATION_NO_HETEROGENEITY]),
+]
+
 # ERL family progression
 ERL_PROGRESSION_MODES = [STANDARD_ERL, ERL_RE2, DIST_ERL, FED_EVO_RL]
 
@@ -178,4 +214,6 @@ def effective_mode_label(mode: str, ablation: str) -> str:
         for key, label in RE2_ABLATION_VARIANTS:
             if key == ablation:
                 return label
+    if mode == FED_EVO_RL and ablation in FED_ABLATION_LABELS:
+        return FED_ABLATION_LABELS[ablation]
     return MODE_LABELS.get(mode, mode)

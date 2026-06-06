@@ -147,7 +147,7 @@ class EAManager:
         weak non-elite individuals keeps useful RL structure while preserving
         client/population diversity.
         """
-        if not self.population:
+        if not self.population or int(copies) <= 0:
             return 0
 
         fitness = np.array([ind.fitness for ind in self.population], dtype=np.float64)
