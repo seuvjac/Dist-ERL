@@ -10,7 +10,7 @@ usage() {
   echo "  seeds   - ./run_seeds.sh (long, MuJoCo x 5 modes x 10 seeds)"
   echo "  plots   - python3 generate_plots.py --log-dir logs --require-real"
   echo "  scaling - ./run_scaling.sh + plot_scaling_bandwidth.py"
-  echo "  smoke   - short LunarLander fed_evo_rl test (30 gen)"
+  echo "  smoke   - short CartPole FedEvoFSAC test (30 gen)"
   echo "  all     - smoke then plots (if logs exist)"
 }
 
@@ -27,8 +27,8 @@ case "$cmd" in
     python3 scripts/plot_scaling_bandwidth.py --log-dir logs
     ;;
   smoke)
-    ./run_fed_evo_rl.sh --env LunarLanderContinuous-v3 --mode fed_evo_rl \
-      --exp-name smoke_lunar_fed_evo --max-generations 30 --num-clients 2 --population-size 20 --seed 42
+    ./run_fed_evo_rl.sh --env CartPole-v1 --mode fed_evo_rl \
+      --exp-name smoke_cartpole_fed_evo_fsac --max-generations 30 --num-clients 2 --population-size 20 --seed 42
     ;;
   all)
     echo "=== smoke (optional quick check) ==="

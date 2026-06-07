@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 
-ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3 LunarLanderContinuous-v3 BipedalWalkerHardcore-v3"}
+ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0"}
 FED_VARIANTS=${FED_VARIANTS:-"full uniform_aggregation no_local_rl no_ea_injection no_heterogeneity"}
 LOG_DIR=${LOG_DIR:-"logs_fedrl_hetero"}
@@ -27,6 +27,7 @@ PY
   EVAL_EPISODES=${FED_EVAL_EPISODES:-2}
   CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-1}
   CLIENT_UPDATES=${FED_CLIENT_UPDATES:-2}
+  ALG=${FED_ALGORITHM:-"FSAC"}
 
   for SEED in $SEEDS; do
     for VARIANT in $FED_VARIANTS; do
@@ -35,7 +36,7 @@ PY
         --env "$ENV_NAME" \
         --mode fed_evo_rl \
         --fed-ablation "$VARIANT" \
-        --algorithm DDPG \
+        --algorithm "$ALG" \
         --population-size "$POP" \
         --num-clients "$CLIENTS" \
         --max-generations "$GENS" \
@@ -45,6 +46,8 @@ PY
         --fed-aggregation softmax \
         --fed-aggregation-interval 5 \
         --fed-aggregation-temperature 75 \
+        --fed-delta-clip-norm 5 \
+        --ea-weight-clip 5 \
         --elite-archive-size 5 \
         --elite-archive-restore-copies 1 \
         --client-rollouts "$CLIENT_ROLLOUTS" \

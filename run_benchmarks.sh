@@ -2,7 +2,7 @@
 # FedEvoRL benchmark: baselines + ERL-Re2 + Dist-ERL + FedEvoRL main method
 set -e
 
-ENV_NAME=${ENV_NAME:-"LunarLanderContinuous-v3"}
+ENV_NAME=${ENV_NAME:-"CartPole-v1"}
 SEED=${SEED:-42}
 ENV_SLUG=$(echo "$ENV_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g')
 

@@ -45,6 +45,16 @@ def _build_q_critic(state_dim: int, action_dim: int, hidden_dim: int) -> nn.Sequ
     )
 
 
+def _build_discrete_q_critic(state_dim: int, action_dim: int, hidden_dim: int) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Linear(state_dim, hidden_dim),
+        nn.ReLU(),
+        nn.Linear(hidden_dim, hidden_dim),
+        nn.ReLU(),
+        nn.Linear(hidden_dim, action_dim),
+    )
+
+
 class DDPGPolicy(BasePolicy):
     """Deep Deterministic Policy Gradient (single critic, no delayed update)."""
 
@@ -198,22 +208,106 @@ class TD3Policy(BasePolicy):
         return critic_loss + actor_loss
 
 
-class PPOPolicy(BasePolicy):
-    """Proximal Policy Optimization"""
+class FSACPolicy(BasePolicy):
+    """Discrete Soft Actor-Critic for federated worker sharing."""
 
-    def __init__(self, state_dim: int = 111, action_dim: int = 8, hidden_dim: int = 256):
+    def __init__(self, state_dim: int = 4, action_dim: int = 2, hidden_dim: int = 256,
+                 init_alpha: float = 0.2, target_entropy: float = None):
         super().__init__(state_dim, action_dim)
-
-        # Actor network (policy)
         self.actor = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.Tanh(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
-            nn.Linear(hidden_dim, action_dim * 2)  # Mean and log_std
+            nn.Linear(hidden_dim, action_dim),
+        )
+        self.critic1 = _build_discrete_q_critic(state_dim, action_dim, hidden_dim)
+        self.critic2 = _build_discrete_q_critic(state_dim, action_dim, hidden_dim)
+        self.target_critic1 = _build_discrete_q_critic(state_dim, action_dim, hidden_dim)
+        self.target_critic2 = _build_discrete_q_critic(state_dim, action_dim, hidden_dim)
+        self.target_critic1.load_state_dict(self.critic1.state_dict())
+        self.target_critic2.load_state_dict(self.critic2.state_dict())
+        self.log_alpha = nn.Parameter(torch.tensor(float(np.log(init_alpha)), dtype=torch.float32))
+        self.target_entropy = float(target_entropy) if target_entropy is not None else 0.98 * np.log(action_dim)
+
+    @property
+    def alpha(self) -> torch.Tensor:
+        return self.log_alpha.exp().clamp(1e-4, 10.0)
+
+    def reset_actor_last_layers(self) -> None:
+        linear_layers = [m for m in self.actor.modules() if isinstance(m, nn.Linear)]
+        for layer in linear_layers[-2:]:
+            nn.init.xavier_uniform_(layer.weight)
+            if layer.bias is not None:
+                nn.init.zeros_(layer.bias)
+
+    def sync_target(self, tau: float = 1.0) -> None:
+        for target, source in ((self.target_critic1, self.critic1), (self.target_critic2, self.critic2)):
+            for tp, sp in zip(target.parameters(), source.parameters()):
+                tp.data.mul_(1.0 - tau).add_(sp.data, alpha=tau)
+
+    def get_action(self, observation: np.ndarray, deterministic: bool = False) -> int:
+        obs = np.asarray(observation, dtype=np.float32)
+        if obs.ndim == 1:
+            obs = obs[np.newaxis, :]
+        with torch.no_grad():
+            logits = self.actor(torch.from_numpy(obs).float())
+            if deterministic:
+                return int(torch.argmax(logits, dim=-1).cpu().numpy()[0])
+            dist = torch.distributions.Categorical(logits=logits)
+            return int(dist.sample().cpu().numpy()[0])
+
+    def update(self, batch: Dict[str, np.ndarray], gamma: float, tau: float) -> torch.Tensor:
+        observations = torch.from_numpy(batch['observations']).float()
+        actions = torch.from_numpy(batch['actions'])
+        if actions.ndim > 1:
+            actions = torch.argmax(actions.float(), dim=-1)
+        actions = actions.long().view(-1, 1)
+        rewards = torch.from_numpy(batch['rewards']).float()
+        next_observations = torch.from_numpy(batch['next_observations']).float()
+        dones = torch.from_numpy(batch['dones']).float()
+
+        q1 = self.critic1(observations).gather(1, actions).squeeze(-1)
+        q2 = self.critic2(observations).gather(1, actions).squeeze(-1)
+
+        with torch.no_grad():
+            next_logits = self.actor(next_observations)
+            next_log_probs = F.log_softmax(next_logits, dim=-1)
+            next_probs = next_log_probs.exp()
+            next_q = torch.min(self.target_critic1(next_observations), self.target_critic2(next_observations))
+            next_v = (next_probs * (next_q - self.alpha.detach() * next_log_probs)).sum(dim=-1)
+            target_q = rewards + gamma * (1.0 - dones) * next_v
+
+        critic_loss = F.smooth_l1_loss(q1, target_q) + F.smooth_l1_loss(q2, target_q)
+
+        logits = self.actor(observations)
+        log_probs = F.log_softmax(logits, dim=-1)
+        probs = log_probs.exp()
+        min_q = torch.min(self.critic1(observations), self.critic2(observations)).detach()
+        actor_loss = (probs * (self.alpha.detach() * log_probs - min_q)).sum(dim=-1).mean()
+        entropy = -(probs.detach() * log_probs).sum(dim=-1).mean()
+        alpha_loss = self.log_alpha * (entropy - self.target_entropy).detach()
+
+        return critic_loss + actor_loss + alpha_loss
+
+
+class PPOPolicy(BasePolicy):
+    """Lightweight PPO-style actor-critic for continuous and discrete actions."""
+
+    def __init__(self, state_dim: int = 111, action_dim: int = 8, hidden_dim: int = 256,
+                 discrete: bool = False):
+        super().__init__(state_dim, action_dim)
+        self.discrete = bool(discrete)
+
+        actor_out = action_dim if self.discrete else action_dim * 2
+        self.actor = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, actor_out),
         )
 
-        # Critic network (value function)
         self.critic = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.Tanh(),
@@ -222,13 +316,27 @@ class PPOPolicy(BasePolicy):
             nn.Linear(hidden_dim, 1)
         )
 
-    def get_action(self, observation: np.ndarray) -> np.ndarray:
-        """Sample action from policy"""
+    def reset_actor_last_layers(self) -> None:
+        linear_layers = [m for m in self.actor.modules() if isinstance(m, nn.Linear)]
+        for layer in linear_layers[-2:]:
+            nn.init.xavier_uniform_(layer.weight)
+            if layer.bias is not None:
+                nn.init.zeros_(layer.bias)
+
+    def get_action(self, observation: np.ndarray, deterministic: bool = False) -> np.ndarray:
+        """Sample or greedily choose an action from the policy."""
         with torch.no_grad():
             obs_tensor = torch.from_numpy(observation).float().unsqueeze(0)
+            if self.discrete:
+                logits = self.actor(obs_tensor)
+                if deterministic:
+                    return int(torch.argmax(logits, dim=-1).item())
+                dist = torch.distributions.Categorical(logits=logits)
+                return int(dist.sample().item())
             mean, log_std = self.actor(obs_tensor).chunk(2, dim=-1)
-            std = log_std.exp()
-
+            if deterministic:
+                return mean.squeeze(0).numpy()
+            std = torch.clamp(log_std, -5.0, 2.0).exp()
             normal = torch.distributions.Normal(mean, std)
             action = normal.sample()
             return action.squeeze(0).numpy()
@@ -236,26 +344,31 @@ class PPOPolicy(BasePolicy):
     def update(self, batch: Dict[str, np.ndarray], gamma: float, tau: float) -> torch.Tensor:
         """PPO update (simplified)"""
         observations = torch.from_numpy(batch['observations']).float()
-        actions = torch.from_numpy(batch['actions']).float()
+        raw_actions = torch.from_numpy(batch['actions'])
         rewards = torch.from_numpy(batch['rewards']).float()
 
-        # Simplified PPO implementation
-        # In practice, you'd need advantages, old log probs, etc.
-
-        # Value loss
         values = self.critic(observations)
         value_loss = F.mse_loss(values.squeeze(), rewards)
-
-        # Policy loss (simplified)
-        mean, log_std = self.actor(observations).chunk(2, dim=-1)
-        std = log_std.exp()
-        normal = torch.distributions.Normal(mean, std)
-        log_probs = normal.log_prob(actions).sum(dim=-1)
-
-        # Dummy advantage (in practice, compute from rewards)
         advantages = rewards - values.squeeze().detach()
-        policy_loss = -(log_probs * advantages).mean()
 
-        total_loss = value_loss + policy_loss
+        if self.discrete:
+            actions = raw_actions
+            if actions.ndim > 1:
+                actions = torch.argmax(actions.float(), dim=-1)
+            actions = actions.long()
+            logits = self.actor(observations)
+            dist = torch.distributions.Categorical(logits=logits)
+            log_probs = dist.log_prob(actions)
+            entropy = dist.entropy().mean()
+        else:
+            actions = raw_actions.float()
+            mean, log_std = self.actor(observations).chunk(2, dim=-1)
+            std = torch.clamp(log_std, -5.0, 2.0).exp()
+            normal = torch.distributions.Normal(mean, std)
+            log_probs = normal.log_prob(actions).sum(dim=-1)
+            entropy = normal.entropy().sum(dim=-1).mean()
+
+        policy_loss = -(log_probs * advantages).mean()
+        total_loss = value_loss + policy_loss - 0.01 * entropy
 
         return total_loss

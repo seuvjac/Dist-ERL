@@ -30,7 +30,9 @@ class EAManager:
             mut_strength=float(ga_cfg.get('mut_strength', 0.1)),
             super_mut_strength=float(ga_cfg.get('super_mut_strength', 10.0)),
             prob_reset_and_super=float(ga_cfg.get('prob_reset_and_super', 0.05)),
+            actor_prefix=str(ga_cfg.get('actor_prefix', 'actor.')),
         )
+        self.weight_clip = float(ga_cfg.get('weight_clip', 5.0))
         self.population: List[Individual] = []
         self.generation = 0
         self.best_fitness_history = []
@@ -48,6 +50,7 @@ class EAManager:
                 key: np.random.normal(0, 0.1, array.shape).astype(array.dtype)
                 for key, array in model_template.items()
             }
+            self._clip_weights(weights)
             return Individual(
                 id=i,
                 weights=weights,
@@ -56,6 +59,17 @@ class EAManager:
             )
 
         self.population = [make_individual(i) for i in range(self.population_size)]
+
+    def _clip_weights(self, weights: Dict[str, np.ndarray]) -> None:
+        if self.weight_clip <= 0:
+            return
+        for key, arr in weights.items():
+            if key.startswith('actor.'):
+                np.clip(arr, -self.weight_clip, self.weight_clip, out=arr)
+
+    def _clip_population_weights(self) -> None:
+        for ind in self.population:
+            self._clip_weights(ind.weights)
 
     def get_population_for_evaluation(self) -> List[Dict[str, Any]]:
         return [
@@ -103,8 +117,10 @@ class EAManager:
             mut_strength=self.ga_config.mut_strength,
             super_mut_strength=self.ga_config.super_mut_strength,
             prob_reset_and_super=self.ga_config.prob_reset_and_super,
+            actor_prefix=self.ga_config.actor_prefix,
         )
         elite_idx, sel_stats = erl_re2_epoch(self.population, cfg)
+        self._clip_population_weights()
         self._elite_index = elite_idx
         self._last_selection_stats = sel_stats
         self.generation += 1
@@ -168,6 +184,7 @@ class EAManager:
             mutation_beta_frac=mutation_rate,
             mut_strength=mutation_strength,
             prob_reset_and_super=0.1,
+            actor_prefix=self.ga_config.actor_prefix,
         )
         replaced = 0
         for ind in self.population[-n_imm:]:
@@ -175,11 +192,13 @@ class EAManager:
                 key: np.random.normal(0, 0.15, array.shape).astype(array.dtype)
                 for key, array in self._model_template.items()
             }
+            self._clip_weights(ind.weights)
             ind.seed = int(np.random.randint(0, 2**32))
             ind.fitness = 0.0
             replaced += 1
         for ind in self.population[self.num_elitists:-n_imm]:
             b_mutate_inplace(ind.weights, cfg)
+            self._clip_weights(ind.weights)
             ind.seed = int(np.random.randint(0, 2**32))
         return replaced
 
@@ -220,6 +239,8 @@ class EAManager:
                 mixed = (1.0 - blend) * current + blend * target
                 if scale > 0 and key.startswith('actor.'):
                     mixed = mixed + np.random.normal(0, scale, mixed.shape).astype(mixed.dtype)
+                    if self.weight_clip > 0:
+                        mixed = np.clip(mixed, -self.weight_clip, self.weight_clip)
                 ind.weights[key] = mixed.astype(current.dtype, copy=False)
             ind.seed = int(np.random.randint(0, 2**32))
             ind.fitness = float(np.median(fitness))
@@ -252,8 +273,16 @@ class EAManager:
             return 0.0
         flat = []
         for ind in self.population:
-            parts = [ind.weights[k].ravel() for k in sorted(ind.weights.keys()) if k.startswith('actor.')]
+            parts = [
+                ind.weights[k].ravel()
+                for k in sorted(ind.weights.keys())
+                if k.startswith('actor.')
+            ]
+            if not parts:
+                continue
             flat.append(np.concatenate(parts))
+        if len(flat) < 2:
+            return 0.0
         vectors = np.stack(flat)
         norms = np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-8
         normed = vectors / norms

@@ -5,9 +5,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 
-ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3 LunarLanderContinuous-v3 BipedalWalkerHardcore-v3"}
+ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0 1 2"}
-SB3_ALGOS=${SB3_ALGOS:-"PPO SAC TD3"}
+SB3_ALGOS=${SB3_ALGOS:-"PPO"}
 SB3_LOG_DIR=${SB3_LOG_DIR:-"logs_sb3"}
 
 for ENV_NAME in $ENVS; do
@@ -19,9 +19,6 @@ PY
 )"
   for SEED in $SEEDS; do
     for ALGO in $SB3_ALGOS; do
-      if [[ "$ENV_NAME" == "CartPole-v1" || "$ENV_NAME" == "Acrobot-v1" || "$ENV_NAME" == "LunarLander-v3" ]] && [[ "$ALGO" != "PPO" ]]; then
-        continue
-      fi
       EXP="sb3_${ALGO,,}_${ENV_NAME}_s${SEED}"
       python3 scripts/train_sb3_baseline.py \
         --env "$ENV_NAME" \

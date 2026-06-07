@@ -1,5 +1,5 @@
 #!/bin/bash
-# Multi-seed benchmark: 6x MuJoCo-v2 x 6 modes (see src/config.py MUJOCO_V2_ENVS)
+# Multi-seed benchmark for the three discrete FedEvoFSAC environments.
 set -e
 cd "$(dirname "$0")"
 export PYTHONPATH="$(pwd):$PYTHONPATH"
@@ -9,11 +9,11 @@ export PYTHONUNBUFFERED=1
 export RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
 
 SEEDS=${SEEDS:-"0 1 2 3 4 5 6 7 8 9"}
-ENVS=${ENVS:-$(python -c "from src.config import MUJOCO_V2_ENVS; print(' '.join(MUJOCO_V2_ENVS))")}
+ENVS=${ENVS:-$(python -c "from src.config import FEDRL_HETEROGENEOUS_ENVS; print(' '.join(FEDRL_HETEROGENEOUS_ENVS))")}
 MODES=${MODES:-"pure_rl pure_ea standard_erl erl_re2 dist_erl fed_evo_rl"}
 
 echo "Multi-seed run: seeds=$SEEDS"
-echo "MuJoCo-v2 envs: $ENVS"
+echo "FedEvoFSAC envs: $ENVS"
 
 for ENV_NAME in $ENVS; do
   ENV_SLUG=$(echo "$ENV_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g')

@@ -57,7 +57,7 @@ def load_runs(log_dirs):
             fed_abl = meta.get('fed_ablation', 'n/a')
             label = mode
             if mode == 'fed_evo_rl':
-                label = f"FedEvoRL-{fed_abl}"
+                label = f"FedEvoFSAC-{fed_abl}"
             elif mode.startswith('sb3_'):
                 label = mode.upper().replace('SB3_', 'SB3-')
             runs.append({
@@ -77,14 +77,12 @@ def main():
     runs = load_runs([args.fed_log_dir, args.sb3_log_dir])
     envs = args.envs or sorted({r['env'] for r in runs})
     colors = {
-        'FedEvoRL-full': '#D55E00',
-        'FedEvoRL-uniform_aggregation': '#0072B2',
-        'FedEvoRL-no_local_rl': '#009E73',
-        'FedEvoRL-no_ea_injection': '#E69F00',
-        'FedEvoRL-no_heterogeneity': '#CC79A7',
+        'FedEvoFSAC-full': '#D55E00',
+        'FedEvoFSAC-uniform_aggregation': '#0072B2',
+        'FedEvoFSAC-no_local_rl': '#009E73',
+        'FedEvoFSAC-no_ea_injection': '#E69F00',
+        'FedEvoFSAC-no_heterogeneity': '#CC79A7',
         'SB3-PPO': '#444444',
-        'SB3-SAC': '#7F7F7F',
-        'SB3-TD3': '#BBBBBB',
     }
     for env in envs:
         env_runs = [r for r in runs if r['env'] == env]

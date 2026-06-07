@@ -8,19 +8,19 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from .utils.environment import get_env_info, make_env
 from .utils.replay_buffer import HybridReplayBuffer
-from .utils.policies import DDPGPolicy, TD3Policy, PPOPolicy
+from .utils.policies import DDPGPolicy, FSACPolicy, TD3Policy, PPOPolicy
 from .utils.policy_utils import ActorEvaluator, encode_action_for_buffer
 
-_GENOTYPE_PREFIXES = ('actor.', 'critic.', 'critic1.', 'critic2.')
+_GENOTYPE_PREFIXES = ('actor.',)
 
 
 @ray.remote(num_gpus=0)
 class RLLearner:
-    """RL Learner - Trajectory reproduction, gradient optimization (DDPG/TD3/PPO)"""
+    """RL Learner - Trajectory reproduction and local RL optimization."""
 
     def __init__(self,
                  env_name: str = "Ant-v2",
-                 algorithm: str = "DDPG",
+                 algorithm: str = "FSAC",
                  buffer_size: int = 1000000,
                  batch_size: int = 256,
                  lr: float = 3e-4,
@@ -42,8 +42,9 @@ class RLLearner:
         self.state_dim = env_info.get('state_dim')
         self.action_dim = env_info.get('action_dim')
         self.action_space = env_info.get('action_space')
+        self.is_discrete = hasattr(self.action_space, 'n')
         self._actor_eval = ActorEvaluator(
-            self.state_dim, self.action_dim, algorithm=self.algorithm)
+            self.state_dim, self.action_dim, algorithm=self.algorithm, discrete=self.is_discrete)
 
         self.replay_buffer = HybridReplayBuffer(buffer_size)
         self.policy = self._initialize_policy()
@@ -58,8 +59,11 @@ class RLLearner:
             return DDPGPolicy(state_dim=self.state_dim, action_dim=self.action_dim)
         if self.algorithm == "TD3":
             return TD3Policy(state_dim=self.state_dim, action_dim=self.action_dim)
+        if self.algorithm == "FSAC":
+            return FSACPolicy(state_dim=self.state_dim, action_dim=self.action_dim)
         if self.algorithm == "PPO":
-            return PPOPolicy(state_dim=self.state_dim, action_dim=self.action_dim)
+            return PPOPolicy(
+                state_dim=self.state_dim, action_dim=self.action_dim, discrete=self.is_discrete)
         raise ValueError(f"Unsupported algorithm: {self.algorithm}")
 
     def _is_genotype_key(self, name: str) -> bool:
@@ -75,7 +79,8 @@ class RLLearner:
         for i in range(n):
             self.replay_buffer.add_rl_data(
                 observation=observations[i],
-                action=encode_action_for_buffer(actions[i], self.action_space, self.action_dim),
+                action=encode_action_for_buffer(
+                    actions[i], self.action_space, self.action_dim, self.algorithm),
                 reward=rewards[i],
                 next_observation=observations[i + 1] if i + 1 < len(observations) else observations[i],
                 done=dones[i],
@@ -91,7 +96,8 @@ class RLLearner:
         for i in range(n):
             self.replay_buffer.add_reproduced_ea_transition(
                 observation=observations[i],
-                action=encode_action_for_buffer(actions[i], self.action_space, self.action_dim),
+                action=encode_action_for_buffer(
+                    actions[i], self.action_space, self.action_dim, self.algorithm),
                 reward=rewards[i],
                 next_observation=observations[i + 1] if i + 1 < len(observations) else observations[i],
                 done=dones[i],
@@ -117,6 +123,10 @@ class RLLearner:
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
         self.optimizer.step()
+        if hasattr(self.policy, 'sync_target'):
+            self.policy.sync_target(self.tau)
+        if hasattr(self.policy, 'decay_epsilon'):
+            self.policy.decay_epsilon()
 
         self.training_steps += 1
         return loss.item() if hasattr(loss, 'item') else float(loss)
@@ -151,8 +161,9 @@ class RLLearner:
         blend = float(np.clip(blend, 0.0, 1.0))
         state_dict = self.policy.state_dict()
         loaded = 0
+        prefixes = ('actor.',)
         for name, current in list(state_dict.items()):
-            if not name.startswith('actor.') or name not in weights:
+            if not name.startswith(prefixes) or name not in weights:
                 continue
             elite_tensor = torch.from_numpy(np.array(weights[name], copy=True)).to(current.dtype)
             if elite_tensor.shape != current.shape:
@@ -185,6 +196,8 @@ class RLLearner:
     def _policy_get_action(self, obs: np.ndarray) -> np.ndarray:
         if self.algorithm in ('TD3', 'DDPG'):
             return self.policy.get_action(obs, exploration_noise=self.policy_exploration_noise)
+        if self.algorithm in ('PPO', 'FSAC'):
+            return self.policy.get_action(obs)
         return self.policy.get_action(obs)
 
     def evaluate_policy_actor_aligned(self, num_episodes: int = 3,

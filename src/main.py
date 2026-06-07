@@ -39,6 +39,8 @@ from src.utils.environment import apply_headless_mujoco_runtime, get_env_info
 from src.utils.policy_utils import build_model_template
 from src.worker import RolloutWorker
 
+FED_EVOFSAC_ENVS = ('CartPole-v1', 'Acrobot-v1', 'LunarLander-v3')
+
 METRIC_FIELDS = [
     'generation', 'total_env_steps', 'eval_reward_mean', 'eval_reward_std',
     'eval_ea_mean', 'eval_ea_std',
@@ -58,7 +60,7 @@ METRIC_FIELDS = [
 def parse_args():
     parser = argparse.ArgumentParser(description="FedEvoRL: EA-guided Federated Reinforcement Learning")
 
-    parser.add_argument('--env', type=str, default='LunarLanderContinuous-v3', help='Environment name')
+    parser.add_argument('--env', type=str, default='CartPole-v1', help='Environment name')
     parser.add_argument('--max-episode-steps', type=int, default=1000, help='Maximum steps per episode')
     parser.add_argument('--population-size', type=int, default=50, help='Population size')
     parser.add_argument('--elite-fraction', type=float, default=0.2,
@@ -92,16 +94,18 @@ def parse_args():
                         help='Softmax temperature for fitness-weighted client aggregation')
     parser.add_argument('--fed-min-client-score-quantile', type=float, default=0.25,
                         help='Drop selected client uploads below this reward quantile before aggregation')
+    parser.add_argument('--fed-delta-clip-norm', type=float, default=5.0,
+                        help='Clip each client update delta before federated aggregation')
     parser.add_argument('--fed-inject-margin', type=float, default=-0.05,
                         help='Relative margin vs current EA best required before injecting aggregated actor')
     parser.add_argument('--elite-archive-size', type=int, default=5,
                         help='Global top-k EA archive for FedEvoRL')
     parser.add_argument('--elite-archive-restore-copies', type=int, default=1,
                         help='Number of archived elites pinned back after each FedEvoRL generation')
-    parser.add_argument('--algorithm', type=str, default='DDPG', choices=['DDPG', 'TD3', 'PPO'],
-                        help='RL algorithm (default: DDPG)')
+    parser.add_argument('--algorithm', type=str, default='FSAC', choices=['FSAC', 'DDPG', 'TD3', 'PPO'],
+                        help='RL algorithm (FedEvoFSAC experiments use discrete FSAC)')
     parser.add_argument('--policy-exploration-noise', type=float, default=0.1,
-                        help='Gaussian noise on DDPG/TD3 actions during RL rollout collection')
+                        help='Exploration noise for deterministic continuous baselines')
     parser.add_argument('--buffer-size', type=int, default=1000000, help='Replay buffer size')
     parser.add_argument('--batch-size', type=int, default=256, help='Batch size')
     parser.add_argument('--lr', type=float, default=3e-4, help='Learning rate')
@@ -125,6 +129,8 @@ def parse_args():
                         help='Fraction of population replaced on stagnation boost')
     parser.add_argument('--inject-noise', type=float, default=0.05,
                         help='Gaussian noise on actor weights when migrating RL into EA')
+    parser.add_argument('--ea-weight-clip', type=float, default=5.0,
+                        help='Clip evolved actor weights to keep EA mutation bounded')
     parser.add_argument('--migration-copies', type=int, default=3,
                         help='Number of weak non-elite EA individuals softly blended with RL on migration')
     parser.add_argument('--migration-blend', type=float, default=0.35,
@@ -201,7 +207,9 @@ def _setup_local_logger(args):
         'fed_aggregation_interval': args.fed_aggregation_interval,
         'fed_aggregation_temperature': args.fed_aggregation_temperature,
         'fed_min_client_score_quantile': args.fed_min_client_score_quantile,
+        'fed_delta_clip_norm': args.fed_delta_clip_norm,
         'fed_inject_margin': args.fed_inject_margin,
+        'ea_weight_clip': args.ea_weight_clip,
         'elite_archive_size': args.elite_archive_size,
         'elite_archive_restore_copies': args.elite_archive_restore_copies,
     }
@@ -222,6 +230,23 @@ def _append_local_metrics(metrics_path, log_data):
 
 def _log(msg: str) -> None:
     print(msg, flush=True)
+
+
+def _validate_algorithm_for_env(args, env_info) -> None:
+    action_space = env_info.get('action_space')
+    is_discrete = hasattr(action_space, 'n')
+    algo = args.algorithm.upper()
+    if args.mode == FED_EVO_RL:
+        if args.env not in FED_EVOFSAC_ENVS:
+            raise ValueError(
+                f"FedEvoFSAC experiments are restricted to {', '.join(FED_EVOFSAC_ENVS)}")
+        if not is_discrete or algo != 'FSAC':
+            raise ValueError(f"{args.env} must use --algorithm FSAC for FedEvoFSAC")
+        return
+    if is_discrete and algo != 'FSAC':
+        raise ValueError(f"{args.env} has a discrete action space; use --algorithm FSAC")
+    if not is_discrete and algo == 'FSAC':
+        raise ValueError(f"{args.env} has a continuous action space; FSAC is discrete only")
 
 
 def _cap_num_workers(requested: int, mode: str) -> int:
@@ -259,12 +284,14 @@ def _apply_fed_ablation_args(args) -> None:
 
 def _run_fed_evo_rl(args, env_info, metrics_path):
     """EA-guided federated RL training loop."""
-    if args.algorithm.upper() not in ('DDPG', 'TD3'):
-        raise ValueError("fed_evo_rl currently supports DDPG/TD3 deterministic actors")
+    if args.algorithm.upper() != 'FSAC':
+        raise ValueError("FedEvoFSAC supports FSAC only")
     ga_config = {
         'mutation_prob': args.ea_mutation_prob,
         'mutation_beta_frac': args.ea_mutation_beta_frac,
         'prob_reset_and_super': args.ea_prob_reset_and_super,
+        'actor_prefix': 'actor.',
+        'weight_clip': args.ea_weight_clip,
     }
     manager = EAManager.remote(
         args.population_size,
@@ -273,7 +300,8 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         ga_config,
     )
     template = build_model_template(
-        env_info['state_dim'], env_info['action_dim'], algorithm=args.algorithm)
+        env_info['state_dim'], env_info['action_dim'], algorithm=args.algorithm,
+        discrete=hasattr(env_info.get('action_space'), 'n'))
     ray.get(manager.initialize_population.remote(template))
 
     clients = [
@@ -354,6 +382,8 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                 mode=args.fed_aggregation,
                 temperature=args.fed_aggregation_temperature,
                 min_score=min_score,
+                base_weights=best.weights,
+                delta_clip_norm=args.fed_delta_clip_norm,
             )
         current_best = float(best.fitness)
         agg_score = float(np.max(client_rewards)) if client_rewards else float('-inf')
@@ -469,6 +499,7 @@ def main():
     _log(f"  Local metrics: {metrics_path}")
 
     env_info = get_env_info(args.env)
+    _validate_algorithm_for_env(args, env_info)
     _log(f"  State dim: {env_info['state_dim']}, Action dim: {env_info['action_dim']} "
          f"(gym_id={env_info.get('gym_id', args.env)})")
 
@@ -500,6 +531,8 @@ def main():
             'mutation_prob': args.ea_mutation_prob,
             'mutation_beta_frac': args.ea_mutation_beta_frac,
             'prob_reset_and_super': args.ea_prob_reset_and_super,
+            'actor_prefix': 'actor.',
+            'weight_clip': args.ea_weight_clip,
         }
         manager = EAManager.remote(
             args.population_size,
@@ -508,7 +541,8 @@ def main():
             ga_config,
         )
         template = build_model_template(
-            env_info['state_dim'], env_info['action_dim'], algorithm=args.algorithm)
+            env_info['state_dim'], env_info['action_dim'], algorithm=args.algorithm,
+            discrete=hasattr(env_info.get('action_space'), 'n'))
         ray.get(manager.initialize_population.remote(template))
 
     if args.mode in RL_MODES:

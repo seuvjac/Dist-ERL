@@ -2,7 +2,7 @@
 # Client scalability + bandwidth logging for fed_evo_rl
 set -e
 
-ENV_NAME=${ENV_NAME:-"Ant-v2"}
+ENV_NAME=${ENV_NAME:-"CartPole-v1"}
 SEED=${SEED:-42}
 GENS=${GENS:-80}
 

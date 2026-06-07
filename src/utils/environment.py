@@ -85,7 +85,7 @@ def _client_env_kwargs(env_name: str, client_id: int, heterogeneity: float, mode
 
     if env_name == 'Pendulum-v1':
         return {'g': max(4.0, 10.0 * (1.0 + 0.25 * strength))}
-    if env_name in ('LunarLanderContinuous-v3', 'LunarLander-v3'):
+    if env_name == 'LunarLander-v3':
         return {
             'gravity': float(np.clip(-10.0 * (1.0 + 0.18 * strength), -12.0, -8.0)),
             'enable_wind': True,

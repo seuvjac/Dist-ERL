@@ -44,16 +44,16 @@ FED_ABLATION_CHOICES = (
 )
 
 MODE_LABELS = {
-    PURE_RL: 'Pure RL (DDPG/TD3)',
+    PURE_RL: 'Pure FSAC',
     PURE_EA: 'Pure EA (ERL-Re² GA)',
     STANDARD_ERL: 'Standard ERL',
     DIST_ERL: 'Dist-ERL',
     ERL_RE2: 'ERL-Re2',
-    FED_EVO_RL: 'FedEvoRL (ours)',
+    FED_EVO_RL: 'FedEvoFSAC (ours)',
 }
 
 FED_ABLATION_LABELS = {
-    FED_ABLATION_FULL: 'FedEvoRL (full)',
+    FED_ABLATION_FULL: 'FedEvoFSAC (full)',
     FED_ABLATION_UNIFORM_AGG: 'w/o fitness aggregation',
     FED_ABLATION_NO_LOCAL_RL: 'w/o local RL updates',
     FED_ABLATION_NO_EA_INJECTION: 'w/o EA injection',
@@ -102,8 +102,6 @@ FEDRL_HETEROGENEOUS_ENVS = [
     'CartPole-v1',
     'Acrobot-v1',
     'LunarLander-v3',
-    'LunarLanderContinuous-v3',
-    'BipedalWalkerHardcore-v3',
 ]
 
 
@@ -142,21 +140,9 @@ def env_run_preset(env_id: str) -> dict:
             'population_size': 24, 'num_workers': 2,
             'max_generations': 80, 'max_episode_steps': 500,
         },
-        'Pendulum-v1': {
-            'population_size': 24, 'num_workers': 2,
-            'max_generations': 80, 'max_episode_steps': 200,
-        },
         'LunarLander-v3': {
             'population_size': 30, 'num_workers': 4,
             'max_generations': 100, 'max_episode_steps': 1000,
-        },
-        'LunarLanderContinuous-v3': {
-            'population_size': 30, 'num_workers': 4,
-            'max_generations': 100, 'max_episode_steps': 1000,
-        },
-        'BipedalWalkerHardcore-v3': {
-            'population_size': 40, 'num_workers': 4,
-            'max_generations': 120, 'max_episode_steps': 1600,
         },
     }
     return presets.get(env_id, {
@@ -183,28 +169,9 @@ BENCHMARK_ENVS = [
     _bench_entry('Ant-v2', 'Ant', 'MuJoCo v2 (main)'),
     _bench_entry('Walker2d-v2', 'Walker2d', 'MuJoCo v2 (main)'),
     _bench_entry('Humanoid-v2', 'Humanoid', 'MuJoCo v2 (main)'),
-    {
-        'id': 'LunarLanderContinuous-v3',
-        'short': 'LunarLander',
-        'max_episode_steps': 1000,
-        'population_size': 30,
-        'num_workers': 4,
-        'max_generations': 100,
-        'note': 'Box2D debug only',
-    },
-    {
-        'id': 'Pendulum-v1',
-        'short': 'Pendulum',
-        'max_episode_steps': 200,
-        'population_size': 20,
-        'num_workers': 2,
-        'max_generations': 100,
-        'note': 'Sanity check',
-    },
     _bench_entry('CartPole-v1', 'CartPole', 'FedRL heterogeneity sanity check'),
     _bench_entry('Acrobot-v1', 'Acrobot', 'FedRL heterogeneity sanity check'),
     _bench_entry('LunarLander-v3', 'LunarLanderDiscrete', 'FedRL heterogeneous Box2D'),
-    _bench_entry('BipedalWalkerHardcore-v3', 'BipedalHardcore', 'FedRL heterogeneous terrain'),
 ]
 
 MUJOCO_ENVS = list(MUJOCO_V2_ENVS)

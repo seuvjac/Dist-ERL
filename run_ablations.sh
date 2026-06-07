@@ -2,7 +2,7 @@
 # Dist-ERL ablation suite: baselines, Dist-ERL scalability, and ERL-Re2 baseline diagnostics
 set -e
 
-ENV_NAME=${ENV_NAME:-"LunarLanderContinuous-v3"}
+ENV_NAME=${ENV_NAME:-"CartPole-v1"}
 POPULATION_SIZE=${POPULATION_SIZE:-30}
 MAX_GENERATIONS=${MAX_GENERATIONS:-100}
 SEEDS=${SEEDS:-"42"}

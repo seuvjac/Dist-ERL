@@ -5,10 +5,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 
-ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3 LunarLanderContinuous-v3 BipedalWalkerHardcore-v3"}
+ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0 1 2"}
 FED_VARIANTS=${FED_VARIANTS:-"full uniform_aggregation no_local_rl no_ea_injection no_heterogeneity"}
-SB3_ALGOS=${SB3_ALGOS:-"PPO SAC TD3"}
+SB3_ALGOS=${SB3_ALGOS:-"PPO"}
 LOG_DIR=${LOG_DIR:-"logs_fedrl_hetero"}
 SB3_LOG_DIR=${SB3_LOG_DIR:-"logs_sb3"}
 
@@ -19,6 +19,7 @@ p = env_run_preset('$ENV_NAME')
 print(p['population_size'], p['num_workers'], p['max_generations'], p['max_episode_steps'])
 PY
 )"
+  ALG=${FED_ALGORITHM:-"FSAC"}
   for SEED in $SEEDS; do
     for VARIANT in $FED_VARIANTS; do
       EXP="fedrlhet_${ENV_NAME}_${VARIANT}_s${SEED}"
@@ -26,7 +27,7 @@ PY
         --env "$ENV_NAME" \
         --mode fed_evo_rl \
         --fed-ablation "$VARIANT" \
-        --algorithm DDPG \
+        --algorithm "$ALG" \
         --population-size "$POP" \
         --num-clients "$CLIENTS" \
         --max-generations "$GENS" \
@@ -36,6 +37,8 @@ PY
         --fed-aggregation softmax \
         --fed-aggregation-interval 5 \
         --fed-aggregation-temperature 75 \
+        --fed-delta-clip-norm 5 \
+        --ea-weight-clip 5 \
         --elite-archive-size 5 \
         --elite-archive-restore-copies 1 \
         --client-rollouts 2 \
@@ -46,9 +49,6 @@ PY
         --exp-name "$EXP"
     done
     for ALGO in $SB3_ALGOS; do
-      if [[ "$ENV_NAME" == "CartPole-v1" || "$ENV_NAME" == "Acrobot-v1" || "$ENV_NAME" == "LunarLander-v3" ]] && [[ "$ALGO" != "PPO" ]]; then
-        continue
-      fi
       EXP="sb3_${ALGO,,}_${ENV_NAME}_s${SEED}"
       python3 scripts/train_sb3_baseline.py \
         --env "$ENV_NAME" \

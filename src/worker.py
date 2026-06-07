@@ -13,7 +13,7 @@ class RolloutWorker:
     """Rollout Worker - Parallel sampling, fitness evaluation, returns only (Seed, Score)"""
 
     def __init__(self, env_name: str = "Ant-v2", max_episode_steps: int = 1000,
-                 algorithm: str = 'DDPG', state_dim: int = None, action_dim: int = None):
+                 algorithm: str = 'FSAC', state_dim: int = None, action_dim: int = None):
         self.env_name = env_name
         self.max_episode_steps = max_episode_steps
         self.algorithm = algorithm
@@ -24,8 +24,9 @@ class RolloutWorker:
             action_dim = env_info['action_dim']
         self.state_dim = state_dim
         self.action_dim = action_dim
+        self.is_discrete = hasattr(get_env_info(env_name).get('action_space'), 'n')
         self._evaluator = ActorEvaluator(
-            self.state_dim, self.action_dim, algorithm=algorithm)
+            self.state_dim, self.action_dim, algorithm=algorithm, discrete=self.is_discrete)
         self._initialize_env()
 
     def _initialize_env(self):

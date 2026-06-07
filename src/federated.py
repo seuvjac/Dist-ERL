@@ -10,11 +10,11 @@ import torch
 import torch.optim as optim
 
 from src.utils.environment import get_env_info, make_env
-from src.utils.policies import DDPGPolicy, PPOPolicy, TD3Policy
+from src.utils.policies import DDPGPolicy, FSACPolicy, PPOPolicy, TD3Policy
 from src.utils.policy_utils import ActorEvaluator, clip_action, encode_action_for_buffer
 from src.utils.replay_buffer import HybridReplayBuffer
 
-_GENOTYPE_PREFIXES = ('actor.', 'critic.', 'critic1.', 'critic2.')
+_GENOTYPE_PREFIXES = ('actor.',)
 
 
 def _aggregation_weights(
@@ -47,8 +47,10 @@ def aggregate_weight_dicts(
     mode: str = 'fitness',
     temperature: float = 1.0,
     min_score: Optional[float] = None,
+    base_weights: Optional[Dict[str, np.ndarray]] = None,
+    delta_clip_norm: Optional[float] = None,
 ) -> Dict[str, np.ndarray]:
-    """Aggregate client model weights with uniform or fitness-aware weights."""
+    """Aggregate client weights using score-normalized, optionally clipped deltas."""
     if not client_weights:
         return {}
     filtered_weights = []
@@ -60,18 +62,32 @@ def aggregate_weight_dicts(
         filtered_scores.append(score)
     if not filtered_weights:
         return {}
-    coeffs = _aggregation_weights(filtered_scores, mode=mode, temperature=temperature)
+    score_arr = np.asarray(filtered_scores, dtype=np.float64)
+    if score_arr.size > 1 and np.isfinite(score_arr).all():
+        score_arr = (score_arr - score_arr.mean()) / (score_arr.std() + 1e-8)
+        if mode == 'softmax':
+            temperature = max(1e-6, temperature / max(1.0, float(np.std(filtered_scores))))
+    coeffs = _aggregation_weights(score_arr, mode=mode, temperature=temperature)
     keys = sorted(set.intersection(*(set(w.keys()) for w in filtered_weights)))
     aggregated: Dict[str, np.ndarray] = {}
     for key in keys:
         base = filtered_weights[0][key]
-        acc = np.zeros_like(base, dtype=np.float64)
+        if base_weights is not None and key in base_weights and base_weights[key].shape == base.shape:
+            center = base_weights[key].astype(np.float64)
+        else:
+            center = np.zeros_like(base, dtype=np.float64)
+        acc_delta = np.zeros_like(base, dtype=np.float64)
         for coeff, weights in zip(coeffs, filtered_weights):
             arr = weights[key]
             if arr.shape != base.shape:
                 continue
-            acc += float(coeff) * arr.astype(np.float64)
-        aggregated[key] = acc.astype(base.dtype)
+            delta = arr.astype(np.float64) - center
+            if delta_clip_norm is not None and delta_clip_norm > 0:
+                norm = float(np.linalg.norm(delta))
+                if norm > delta_clip_norm:
+                    delta = delta * (float(delta_clip_norm) / (norm + 1e-8))
+            acc_delta += float(coeff) * delta
+        aggregated[key] = (center + acc_delta).astype(base.dtype)
     return aggregated
 
 
@@ -97,7 +113,7 @@ class FederatedClient:
         self,
         client_id: int,
         env_name: str,
-        algorithm: str = 'DDPG',
+        algorithm: str = 'FSAC',
         buffer_size: int = 1000000,
         batch_size: int = 256,
         lr: float = 3e-4,
@@ -124,6 +140,7 @@ class FederatedClient:
         env_info = get_env_info(env_name)
         self.state_dim = env_info['state_dim']
         self.action_dim = env_info['action_dim']
+        self.is_discrete = hasattr(env_info.get('action_space'), 'n')
         self.reward_scale = 1.0 + self.heterogeneity * ((self.client_id % 5) - 2) / 4.0
         self.action_noise = self.heterogeneity * 0.05 * (1 + (self.client_id % 3))
         self.seed_offset = self.client_id * 10007
@@ -131,7 +148,8 @@ class FederatedClient:
         self.replay_buffer = HybridReplayBuffer(buffer_size)
         self.policy = self._initialize_policy()
         self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
-        self._actor_eval = ActorEvaluator(self.state_dim, self.action_dim, algorithm=self.algorithm)
+        self._actor_eval = ActorEvaluator(
+            self.state_dim, self.action_dim, algorithm=self.algorithm, discrete=self.is_discrete)
         self.training_steps = 0
 
     def _initialize_policy(self):
@@ -139,8 +157,10 @@ class FederatedClient:
             return DDPGPolicy(self.state_dim, self.action_dim)
         if self.algorithm == 'TD3':
             return TD3Policy(self.state_dim, self.action_dim)
+        if self.algorithm == 'FSAC':
+            return FSACPolicy(self.state_dim, self.action_dim)
         if self.algorithm == 'PPO':
-            return PPOPolicy(self.state_dim, self.action_dim)
+            return PPOPolicy(self.state_dim, self.action_dim, discrete=self.is_discrete)
         raise ValueError(f'Unsupported algorithm: {self.algorithm}')
 
     def _is_genotype_key(self, name: str) -> bool:
@@ -170,6 +190,8 @@ class FederatedClient:
     def _policy_action(self, observation: np.ndarray) -> np.ndarray:
         if self.algorithm in ('DDPG', 'TD3'):
             return self.policy.get_action(observation, exploration_noise=self.policy_exploration_noise)
+        if self.algorithm in ('PPO', 'FSAC'):
+            return self.policy.get_action(observation)
         return self.policy.get_action(observation)
 
     def evaluate_weights(
@@ -242,7 +264,8 @@ class FederatedClient:
                 action = clip_action(self._policy_action(obs), env.action_space)
                 next_obs, reward, done, truncated, _ = env.step(action)
                 scaled_reward = float(reward) * self.reward_scale
-                actions.append(encode_action_for_buffer(action, env.action_space, self.action_dim))
+                actions.append(encode_action_for_buffer(
+                    action, env.action_space, self.action_dim, self.algorithm))
                 rewards.append(scaled_reward)
                 dones.append(done or truncated)
                 observations.append(np.array(next_obs, copy=True))
@@ -271,6 +294,10 @@ class FederatedClient:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
             self.optimizer.step()
+            if hasattr(self.policy, 'sync_target'):
+                self.policy.sync_target(self.tau)
+            if hasattr(self.policy, 'decay_epsilon'):
+                self.policy.decay_epsilon()
             losses.append(float(loss.item() if hasattr(loss, 'item') else loss))
             self.training_steps += 1
 
@@ -284,6 +311,7 @@ class FederatedClient:
             'training_steps': int(self.training_steps),
             'buffer_size': int(len(self.replay_buffer)),
             'loss_mean': float(np.mean(losses)) if losses else 0.0,
+            'epsilon': float(getattr(self.policy, 'exploration_epsilon', 0.0)),
             'reward_scale': float(self.reward_scale),
             'action_noise': float(self.action_noise),
         }

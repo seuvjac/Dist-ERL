@@ -8,10 +8,10 @@ from src.utils.policy_utils import ActorEvaluator, build_model_template
 
 
 @pytest.fixture
-def lunar_setup():
-    env_name = 'LunarLanderContinuous-v3'
+def cartpole_setup():
+    env_name = 'CartPole-v1'
     info = get_env_info(env_name)
-    template = build_model_template(info['state_dim'], info['action_dim'], algorithm='DDPG')
+    template = build_model_template(info['state_dim'], info['action_dim'], algorithm='FSAC')
     weights = {k: v.copy() for k, v in template.items()}
     np.random.seed(0)
     for k in weights:
@@ -36,15 +36,15 @@ def _rollout(env, evaluator, weights, seed, max_steps=200):
     return obs_list, act_list, rew_list
 
 
-def test_worker_learner_trajectory_alignment(lunar_setup):
-    env_name, info, weights = lunar_setup
+def test_worker_learner_trajectory_alignment(cartpole_setup):
+    env_name, info, weights = cartpole_setup
     seed = 12345
     max_steps = 150
 
     env1 = make_env(env_name, max_episode_steps=max_steps)
     env2 = make_env(env_name, max_episode_steps=max_steps)
-    ev1 = ActorEvaluator(info['state_dim'], info['action_dim'], algorithm='DDPG')
-    ev2 = ActorEvaluator(info['state_dim'], info['action_dim'], algorithm='DDPG')
+    ev1 = ActorEvaluator(info['state_dim'], info['action_dim'], algorithm='FSAC', discrete=True)
+    ev2 = ActorEvaluator(info['state_dim'], info['action_dim'], algorithm='FSAC', discrete=True)
 
     o1, a1, r1 = _rollout(env1, ev1, weights, seed, max_steps)
     o2, a2, r2 = _rollout(env2, ev2, weights, seed, max_steps)
@@ -62,13 +62,13 @@ def test_worker_learner_trajectory_alignment(lunar_setup):
     assert rew_err < 1e-5, f'reward mismatch {rew_err}'
 
 
-def test_actor_weights_change_fitness(lunar_setup):
+def test_actor_weights_change_fitness(cartpole_setup):
     """Fitness must depend on weights, not random actions."""
-    env_name, info, weights = lunar_setup
+    env_name, info, weights = cartpole_setup
     seed = 7
     max_steps = 100
     env = make_env(env_name, max_episode_steps=max_steps)
-    ev = ActorEvaluator(info['state_dim'], info['action_dim'])
+    ev = ActorEvaluator(info['state_dim'], info['action_dim'], algorithm='FSAC', discrete=True)
 
     _, _, r1 = _rollout(env, ev, weights, seed, max_steps)
     w2 = {k: v.copy() for k, v in weights.items()}
