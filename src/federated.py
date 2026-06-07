@@ -11,18 +11,30 @@ import torch.optim as optim
 
 from src.utils.environment import get_env_info, make_env
 from src.utils.policies import DDPGPolicy, PPOPolicy, TD3Policy
-from src.utils.policy_utils import ActorEvaluator, clip_action
+from src.utils.policy_utils import ActorEvaluator, clip_action, encode_action_for_buffer
 from src.utils.replay_buffer import HybridReplayBuffer
 
 _GENOTYPE_PREFIXES = ('actor.', 'critic.', 'critic1.', 'critic2.')
 
 
-def _aggregation_weights(scores: Sequence[float], mode: str = 'fitness') -> np.ndarray:
+def _aggregation_weights(
+    scores: Sequence[float],
+    mode: str = 'fitness',
+    temperature: float = 1.0,
+) -> np.ndarray:
     scores_arr = np.asarray(scores, dtype=np.float64)
     if scores_arr.size == 0:
         return scores_arr
     if mode == 'uniform' or not np.isfinite(scores_arr).all():
         return np.ones_like(scores_arr) / len(scores_arr)
+    if mode == 'softmax':
+        temp = max(1e-6, float(temperature))
+        logits = (scores_arr - scores_arr.max()) / temp
+        coeffs = np.exp(np.clip(logits, -60.0, 0.0))
+        total = float(coeffs.sum())
+        if total <= 1e-8:
+            return np.ones_like(scores_arr) / len(scores_arr)
+        return coeffs / total
     shifted = scores_arr - scores_arr.min()
     if float(shifted.sum()) <= 1e-8:
         return np.ones_like(scores_arr) / len(scores_arr)
@@ -33,17 +45,28 @@ def aggregate_weight_dicts(
     client_weights: Sequence[Dict[str, np.ndarray]],
     scores: Sequence[float],
     mode: str = 'fitness',
+    temperature: float = 1.0,
+    min_score: Optional[float] = None,
 ) -> Dict[str, np.ndarray]:
     """Aggregate client model weights with uniform or fitness-aware weights."""
     if not client_weights:
         return {}
-    coeffs = _aggregation_weights(scores, mode=mode)
-    keys = sorted(set.intersection(*(set(w.keys()) for w in client_weights)))
+    filtered_weights = []
+    filtered_scores = []
+    for weights, score in zip(client_weights, scores):
+        if min_score is not None and float(score) < float(min_score):
+            continue
+        filtered_weights.append(weights)
+        filtered_scores.append(score)
+    if not filtered_weights:
+        return {}
+    coeffs = _aggregation_weights(filtered_scores, mode=mode, temperature=temperature)
+    keys = sorted(set.intersection(*(set(w.keys()) for w in filtered_weights)))
     aggregated: Dict[str, np.ndarray] = {}
     for key in keys:
-        base = client_weights[0][key]
+        base = filtered_weights[0][key]
         acc = np.zeros_like(base, dtype=np.float64)
-        for coeff, weights in zip(coeffs, client_weights):
+        for coeff, weights in zip(coeffs, filtered_weights):
             arr = weights[key]
             if arr.shape != base.shape:
                 continue
@@ -52,8 +75,8 @@ def aggregate_weight_dicts(
     return aggregated
 
 
-def weight_entropy(scores: Sequence[float], mode: str = 'fitness') -> float:
-    coeffs = _aggregation_weights(scores, mode=mode)
+def weight_entropy(scores: Sequence[float], mode: str = 'fitness', temperature: float = 1.0) -> float:
+    coeffs = _aggregation_weights(scores, mode=mode, temperature=temperature)
     if coeffs.size == 0:
         return 0.0
     coeffs = np.clip(coeffs, 1e-12, 1.0)
@@ -82,6 +105,7 @@ class FederatedClient:
         tau: float = 0.005,
         max_episode_steps: int = 1000,
         heterogeneity: float = 0.2,
+        heterogeneity_mode: str = 'reward_action_noise',
         policy_exploration_noise: float = 0.1,
     ):
         self.client_id = int(client_id)
@@ -94,6 +118,7 @@ class FederatedClient:
         self.tau = tau
         self.max_episode_steps = max_episode_steps
         self.heterogeneity = max(0.0, float(heterogeneity))
+        self.heterogeneity_mode = heterogeneity_mode
         self.policy_exploration_noise = policy_exploration_noise
 
         env_info = get_env_info(env_name)
@@ -153,7 +178,13 @@ class FederatedClient:
         seed: Optional[int] = None,
         num_episodes: int = 1,
     ) -> Dict[str, Any]:
-        env = make_env(self.env_name, max_episode_steps=self.max_episode_steps)
+        env = make_env(
+            self.env_name,
+            max_episode_steps=self.max_episode_steps,
+            client_id=self.client_id,
+            heterogeneity=self.heterogeneity,
+            heterogeneity_mode=self.heterogeneity_mode,
+        )
         self._actor_eval.load_weights(weights)
         rewards = []
         for ep in range(num_episodes):
@@ -165,7 +196,7 @@ class FederatedClient:
             steps = 0
             while not (done or truncated) and steps < self.max_episode_steps:
                 action = self._actor_eval.get_action(obs, env.action_space)
-                if self.action_noise > 0:
+                if self.action_noise > 0 and not hasattr(env.action_space, 'n'):
                     action = clip_action(
                         action + np.random.normal(0, self.action_noise, np.shape(action)),
                         env.action_space,
@@ -189,7 +220,13 @@ class FederatedClient:
         seed: Optional[int] = None,
     ) -> Dict[str, Any]:
         self._load_weights(weights)
-        env = make_env(self.env_name, max_episode_steps=self.max_episode_steps)
+        env = make_env(
+            self.env_name,
+            max_episode_steps=self.max_episode_steps,
+            client_id=self.client_id,
+            heterogeneity=self.heterogeneity,
+            heterogeneity_mode=self.heterogeneity_mode,
+        )
         total_reward = 0.0
         total_steps = 0
 
@@ -205,7 +242,7 @@ class FederatedClient:
                 action = clip_action(self._policy_action(obs), env.action_space)
                 next_obs, reward, done, truncated, _ = env.step(action)
                 scaled_reward = float(reward) * self.reward_scale
-                actions.append(action)
+                actions.append(encode_action_for_buffer(action, env.action_space, self.action_dim))
                 rewards.append(scaled_reward)
                 dones.append(done or truncated)
                 observations.append(np.array(next_obs, copy=True))

@@ -94,6 +94,15 @@ def clip_action(action: np.ndarray, action_space) -> np.ndarray:
     return action
 
 
+def encode_action_for_buffer(action, action_space, action_dim: int) -> np.ndarray:
+    """Store discrete actions as one-hot vectors so deterministic critics keep a fixed input shape."""
+    if hasattr(action_space, 'n'):
+        encoded = np.zeros(int(action_dim), dtype=np.float32)
+        encoded[int(action)] = 1.0
+        return encoded
+    return np.asarray(action, dtype=np.float32)
+
+
 class ActorEvaluator:
     """Lightweight actor for Ray Workers (TD3 / DDPG deterministic policy)."""
 

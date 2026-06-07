@@ -2,9 +2,10 @@
 
 import os
 import warnings
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import gymnasium as gym
+import numpy as np
 
 # Literature task IDs (*-v2) → runnable Gymnasium MuJoCo (v5 backend, paper labels unchanged).
 MUJOCO_V2_RUNTIME_MAP: Dict[str, str] = {
@@ -32,16 +33,137 @@ def resolve_gym_env_id(env_name: str) -> str:
     return MUJOCO_V2_RUNTIME_MAP.get(env_name, env_name)
 
 
-def make_env(env_name: str, max_episode_steps: int = 1000, **kwargs) -> gym.Env:
+class HeterogeneousClientEnv(gym.Wrapper):
+    """Client-local MDP perturbations for federated RL experiments."""
+
+    def __init__(
+        self,
+        env: gym.Env,
+        client_id: int,
+        heterogeneity: float,
+        mode: str = 'reward_action_noise',
+    ):
+        super().__init__(env)
+        self.client_id = int(client_id)
+        self.heterogeneity = max(0.0, float(heterogeneity))
+        self.mode = mode
+        phase = ((self.client_id % 7) - 3) / 3.0
+        self.reward_scale = 1.0 + 0.15 * self.heterogeneity * phase
+        self.reward_bias = 0.02 * self.heterogeneity * phase
+        self.action_noise = 0.03 * self.heterogeneity * (1 + (self.client_id % 3))
+        self.observation_noise = 0.01 * self.heterogeneity * (1 + (self.client_id % 2))
+        self.seed_offset = self.client_id * 9973
+        self._rng = np.random.default_rng(self.seed_offset)
+
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
+        local_seed = None if seed is None else int(seed + self.seed_offset)
+        obs, info = self.env.reset(seed=local_seed, options=options)
+        return self._perturb_observation(obs), info
+
+    def step(self, action):
+        if self.action_noise > 0 and hasattr(self.action_space, 'low'):
+            noise = self._rng.normal(0.0, self.action_noise, np.shape(action))
+            action = np.clip(action + noise, self.action_space.low, self.action_space.high)
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        reward = float(reward) * self.reward_scale + self.reward_bias
+        return self._perturb_observation(obs), reward, terminated, truncated, info
+
+    def _perturb_observation(self, obs):
+        if self.observation_noise <= 0:
+            return obs
+        arr = np.asarray(obs, dtype=np.float32)
+        noise = self._rng.normal(0.0, self.observation_noise, arr.shape).astype(np.float32)
+        return arr + noise
+
+
+def _client_env_kwargs(env_name: str, client_id: int, heterogeneity: float, mode: str) -> Dict[str, Any]:
+    """Best-effort Gymnasium kwargs for literature-style client heterogeneity."""
+    if heterogeneity <= 0 or mode in ('none', 'reward_action_noise'):
+        return {}
+    phase = ((int(client_id) % 7) - 3) / 3.0
+    strength = float(heterogeneity) * phase
+
+    if env_name == 'Pendulum-v1':
+        return {'g': max(4.0, 10.0 * (1.0 + 0.25 * strength))}
+    if env_name in ('LunarLanderContinuous-v3', 'LunarLander-v3'):
+        return {
+            'gravity': float(np.clip(-10.0 * (1.0 + 0.18 * strength), -12.0, -8.0)),
+            'enable_wind': True,
+            'wind_power': float(np.clip(8.0 + 8.0 * strength, 0.0, 20.0)),
+            'turbulence_power': float(np.clip(1.0 + 1.5 * strength, 0.0, 3.0)),
+        }
+    return {}
+
+
+def _apply_classic_control_heterogeneity(
+    env: gym.Env,
+    env_name: str,
+    client_id: int,
+    heterogeneity: float,
+    mode: str,
+) -> None:
+    if heterogeneity <= 0 or mode in ('none', 'reward_action_noise'):
+        return
+    phase = ((int(client_id) % 7) - 3) / 3.0
+    strength = float(heterogeneity) * phase
+    base = env.unwrapped
+    if env_name == 'Acrobot-v1':
+        for attr, base_value, scale in (
+            ('LINK_LENGTH_1', 1.0, 0.20),
+            ('LINK_LENGTH_2', 1.0, -0.15),
+            ('LINK_MASS_1', 1.0, 0.20),
+            ('LINK_MASS_2', 1.0, -0.20),
+            ('LINK_COM_POS_1', 0.5, 0.15),
+            ('LINK_COM_POS_2', 0.5, -0.15),
+        ):
+            if hasattr(base, attr):
+                setattr(base, attr, base_value * (1.0 + scale * strength))
+        if hasattr(base, 'g'):
+            base.g = 9.8 * (1.0 + 0.20 * strength)
+        return
+    if env_name != 'CartPole-v1':
+        return
+    if hasattr(base, 'gravity'):
+        base.gravity = 9.8 * (1.0 + 0.15 * strength)
+    if hasattr(base, 'masscart'):
+        base.masscart = 1.0 * (1.0 + 0.20 * strength)
+    if hasattr(base, 'masspole'):
+        base.masspole = 0.1 * (1.0 - 0.20 * strength)
+    if hasattr(base, 'length'):
+        base.length = 0.5 * (1.0 + 0.25 * strength)
+    if hasattr(base, 'masscart') and hasattr(base, 'masspole'):
+        base.total_mass = base.masscart + base.masspole
+    if hasattr(base, 'masspole') and hasattr(base, 'length'):
+        base.polemass_length = base.masspole * base.length
+
+
+def make_env(
+    env_name: str,
+    max_episode_steps: int = 1000,
+    client_id: Optional[int] = None,
+    heterogeneity: float = 0.0,
+    heterogeneity_mode: str = 'reward_action_noise',
+    **kwargs,
+) -> gym.Env:
     """Create environment with specified parameters (no rendering)."""
     gym_id = resolve_gym_env_id(env_name)
     kwargs.setdefault('render_mode', None)
+    if client_id is not None:
+        kwargs.update(_client_env_kwargs(env_name, client_id, heterogeneity, heterogeneity_mode))
     try:
         env = gym.make(gym_id, max_episode_steps=max_episode_steps, **kwargs)
     except TypeError:
-        kwargs.pop('render_mode', None)
-        env = gym.make(gym_id, **kwargs)
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs.pop('render_mode', None)
+        for key in ('g', 'gravity', 'enable_wind', 'wind_power', 'turbulence_power'):
+            fallback_kwargs.pop(key, None)
+        env = gym.make(gym_id, **fallback_kwargs)
         env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
+    if client_id is not None:
+        _apply_classic_control_heterogeneity(
+            env, env_name, client_id, heterogeneity, heterogeneity_mode)
+    if client_id is not None and heterogeneity > 0:
+        env = HeterogeneousClientEnv(env, client_id, heterogeneity, heterogeneity_mode)
     return env
 
 

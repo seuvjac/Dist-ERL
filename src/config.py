@@ -98,6 +98,14 @@ MUJOCO_V2_ENVS = [
     'Humanoid-v2',
 ]
 
+FEDRL_HETEROGENEOUS_ENVS = [
+    'CartPole-v1',
+    'Acrobot-v1',
+    'LunarLander-v3',
+    'LunarLanderContinuous-v3',
+    'BipedalWalkerHardcore-v3',
+]
+
 
 def env_run_preset(env_id: str) -> dict:
     """Per-task defaults for distributed runs (population, workers, horizon)."""
@@ -125,6 +133,30 @@ def env_run_preset(env_id: str) -> dict:
         'Humanoid-v2': {
             'population_size': 30, 'num_workers': 4,
             'max_generations': 200, 'max_episode_steps': 1000,
+        },
+        'CartPole-v1': {
+            'population_size': 24, 'num_workers': 2,
+            'max_generations': 80, 'max_episode_steps': 500,
+        },
+        'Acrobot-v1': {
+            'population_size': 24, 'num_workers': 2,
+            'max_generations': 80, 'max_episode_steps': 500,
+        },
+        'Pendulum-v1': {
+            'population_size': 24, 'num_workers': 2,
+            'max_generations': 80, 'max_episode_steps': 200,
+        },
+        'LunarLander-v3': {
+            'population_size': 30, 'num_workers': 4,
+            'max_generations': 100, 'max_episode_steps': 1000,
+        },
+        'LunarLanderContinuous-v3': {
+            'population_size': 30, 'num_workers': 4,
+            'max_generations': 100, 'max_episode_steps': 1000,
+        },
+        'BipedalWalkerHardcore-v3': {
+            'population_size': 40, 'num_workers': 4,
+            'max_generations': 120, 'max_episode_steps': 1600,
         },
     }
     return presets.get(env_id, {
@@ -169,6 +201,10 @@ BENCHMARK_ENVS = [
         'max_generations': 100,
         'note': 'Sanity check',
     },
+    _bench_entry('CartPole-v1', 'CartPole', 'FedRL heterogeneity sanity check'),
+    _bench_entry('Acrobot-v1', 'Acrobot', 'FedRL heterogeneity sanity check'),
+    _bench_entry('LunarLander-v3', 'LunarLanderDiscrete', 'FedRL heterogeneous Box2D'),
+    _bench_entry('BipedalWalkerHardcore-v3', 'BipedalHardcore', 'FedRL heterogeneous terrain'),
 ]
 
 MUJOCO_ENVS = list(MUJOCO_V2_ENVS)

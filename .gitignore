@@ -130,6 +130,7 @@ dmypy.json
 
 # Project specific
 logs/
+logs_*/
 logs_compare/
 logs_smoke/
 plots/

@@ -50,6 +50,8 @@ METRIC_FIELDS = [
     'federated_warm_start', 'migration_copies',
     'client_reward_mean', 'client_reward_std', 'client_fitness_mean',
     'client_fitness_std', 'selected_clients', 'aggregation_entropy',
+    'fed_round_applied', 'archive_best', 'archive_size',
+    'aggregation_temperature',
 ]
 
 
@@ -78,9 +80,24 @@ def parse_args():
                         help='Local gradient updates per selected federated client')
     parser.add_argument('--client-heterogeneity', type=float, default=0.2,
                         help='Synthetic client MDP heterogeneity strength')
-    parser.add_argument('--fed-aggregation', type=str, default='fitness',
-                        choices=['fitness', 'uniform'],
+    parser.add_argument('--client-heterogeneity-mode', type=str, default='env_params',
+                        choices=['none', 'reward_action_noise', 'env_params'],
+                        help='How client-local MDP heterogeneity is applied')
+    parser.add_argument('--fed-aggregation', type=str, default='softmax',
+                        choices=['fitness', 'uniform', 'softmax'],
                         help='Federated aggregation rule for client model uploads')
+    parser.add_argument('--fed-aggregation-interval', type=int, default=5,
+                        help='Run federated local train/aggregation every K generations')
+    parser.add_argument('--fed-aggregation-temperature', type=float, default=75.0,
+                        help='Softmax temperature for fitness-weighted client aggregation')
+    parser.add_argument('--fed-min-client-score-quantile', type=float, default=0.25,
+                        help='Drop selected client uploads below this reward quantile before aggregation')
+    parser.add_argument('--fed-inject-margin', type=float, default=-0.05,
+                        help='Relative margin vs current EA best required before injecting aggregated actor')
+    parser.add_argument('--elite-archive-size', type=int, default=5,
+                        help='Global top-k EA archive for FedEvoRL')
+    parser.add_argument('--elite-archive-restore-copies', type=int, default=1,
+                        help='Number of archived elites pinned back after each FedEvoRL generation')
     parser.add_argument('--algorithm', type=str, default='DDPG', choices=['DDPG', 'TD3', 'PPO'],
                         help='RL algorithm (default: DDPG)')
     parser.add_argument('--policy-exploration-noise', type=float, default=0.1,
@@ -179,7 +196,14 @@ def _setup_local_logger(args):
         'client_rollouts': args.client_rollouts,
         'client_updates': args.client_updates,
         'client_heterogeneity': args.client_heterogeneity,
+        'client_heterogeneity_mode': args.client_heterogeneity_mode,
         'fed_aggregation': args.fed_aggregation,
+        'fed_aggregation_interval': args.fed_aggregation_interval,
+        'fed_aggregation_temperature': args.fed_aggregation_temperature,
+        'fed_min_client_score_quantile': args.fed_min_client_score_quantile,
+        'fed_inject_margin': args.fed_inject_margin,
+        'elite_archive_size': args.elite_archive_size,
+        'elite_archive_restore_copies': args.elite_archive_restore_copies,
     }
     with open(os.path.join(run_dir, 'metadata.json'), 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
@@ -230,6 +254,7 @@ def _apply_fed_ablation_args(args) -> None:
         args.migration_copies = 0
     elif args.fed_ablation == FED_ABLATION_NO_HETEROGENEITY:
         args.client_heterogeneity = 0.0
+        args.client_heterogeneity_mode = 'none'
 
 
 def _run_fed_evo_rl(args, env_info, metrics_path):
@@ -261,6 +286,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             lr=args.lr,
             max_episode_steps=args.max_episode_steps,
             heterogeneity=args.client_heterogeneity,
+            heterogeneity_mode=args.client_heterogeneity_mode,
             policy_exploration_noise=args.policy_exploration_noise,
         )
         for i in range(args.num_clients)
@@ -272,6 +298,8 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
     total_env_steps_history = []
     rl_steps_history = []
     selected_count = max(1, int(round(args.num_clients * np.clip(args.client_fraction, 0.0, 1.0))))
+    last_client_reward_mean = 0.0
+    last_client_reward_std = 0.0
 
     for generation in range(args.max_generations):
         gen_start = time.time()
@@ -294,40 +322,64 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             for ind_id, values in fitness_by_id.items()
         ]
         ray.get(manager.update_fitness.remote(fitness_rows))
+        ray.get(manager.update_elite_archive.remote(args.elite_archive_size))
         ray.get(manager.evolve_population.remote())
+        ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))
 
         best = ray.get(manager.get_best_individual.remote())
-        client_indices = np.random.choice(
-            np.arange(args.num_clients), size=selected_count, replace=False)
-        train_refs = [
-            clients[int(idx)].local_train.remote(
-                best.weights, args.client_rollouts, args.client_updates,
-                args.seed + generation * 1000,
-            )
-            for idx in client_indices
-        ]
-        train_results = ray.get(train_refs)
+        fed_round_applied = int(generation % max(1, args.fed_aggregation_interval) == 0)
+        train_results = []
+        aggregated = {}
+        inserted = 0
+        client_indices = []
+        if fed_round_applied:
+            client_indices = np.random.choice(
+                np.arange(args.num_clients), size=selected_count, replace=False)
+            train_refs = [
+                clients[int(idx)].local_train.remote(
+                    best.weights, args.client_rollouts, args.client_updates,
+                    args.seed + generation * 1000,
+                )
+                for idx in client_indices
+            ]
+            train_results = ray.get(train_refs)
         client_rewards = [r['avg_reward'] for r in train_results]
         client_weights = [r['weights'] for r in train_results]
-        aggregated = aggregate_weight_dicts(
-            client_weights, client_rewards, mode=args.fed_aggregation)
-        if aggregated and args.migration_copies > 0:
+        if client_rewards:
+            q = float(np.clip(args.fed_min_client_score_quantile, 0.0, 1.0))
+            min_score = float(np.quantile(client_rewards, q)) if len(client_rewards) > 1 else None
+            aggregated = aggregate_weight_dicts(
+                client_weights,
+                client_rewards,
+                mode=args.fed_aggregation,
+                temperature=args.fed_aggregation_temperature,
+                min_score=min_score,
+            )
+        current_best = float(best.fitness)
+        agg_score = float(np.max(client_rewards)) if client_rewards else float('-inf')
+        inject_ok = agg_score >= current_best * (1.0 + args.fed_inject_margin)
+        if aggregated and args.migration_copies > 0 and inject_ok:
             inserted = ray.get(manager.inject_rl_individual.remote(
                 aggregated, args.inject_noise, args.migration_copies, args.migration_blend))
-        else:
-            inserted = 0
+            ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))
 
         total_env_steps += (
             len(population) * args.num_clients * args.max_episode_steps * max(1, args.eval_episodes // 2)
-            + selected_count * args.client_rollouts * args.max_episode_steps
+            + fed_round_applied * selected_count * args.client_rollouts * args.max_episode_steps
         )
         stats = ray.get(manager.get_stats.remote())
         upload_b, full_b = _estimate_comm_bytes(
             args.population_size, env_info['state_dim'], env_info['action_dim'], args.max_episode_steps)
         fed_upload = selected_count * sum(arr.nbytes for arr in aggregated.values()) if aggregated else 0
 
-        client_reward_mean = float(np.mean(client_rewards)) if client_rewards else 0.0
-        client_reward_std = float(np.std(client_rewards)) if client_rewards else 0.0
+        if client_rewards:
+            client_reward_mean = float(np.mean(client_rewards))
+            client_reward_std = float(np.std(client_rewards))
+            last_client_reward_mean = client_reward_mean
+            last_client_reward_std = client_reward_std
+        else:
+            client_reward_mean = last_client_reward_mean
+            client_reward_std = last_client_reward_std
         client_fitness_values = [r['fitness'] for r in eval_results]
         eval_reward_history.append(client_reward_mean)
         total_env_steps_history.append(total_env_steps)
@@ -356,8 +408,16 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             'client_reward_std': client_reward_std,
             'client_fitness_mean': float(np.mean(client_fitness_values)) if client_fitness_values else 0.0,
             'client_fitness_std': float(np.std(client_fitness_values)) if client_fitness_values else 0.0,
-            'selected_clients': selected_count,
-            'aggregation_entropy': weight_entropy(client_rewards, mode=args.fed_aggregation),
+            'selected_clients': selected_count if fed_round_applied else 0,
+            'aggregation_entropy': weight_entropy(
+                client_rewards,
+                mode=args.fed_aggregation,
+                temperature=args.fed_aggregation_temperature,
+            ) if client_rewards else 0.0,
+            'fed_round_applied': fed_round_applied,
+            'archive_best': stats.get('archive_best', 0.0),
+            'archive_size': stats.get('archive_size', 0),
+            'aggregation_temperature': args.fed_aggregation_temperature,
         }
         _append_local_metrics(metrics_path, log_data)
         _log(

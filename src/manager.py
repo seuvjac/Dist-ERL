@@ -37,6 +37,8 @@ class EAManager:
         self._model_template: Optional[Dict[str, np.ndarray]] = None
         self._last_selection_stats: Dict[str, float] = {}
         self._elite_index: int = 0
+        self._elite_archive: List[Individual] = []
+        self._archive_size: int = 0
 
     def initialize_population(self, model_template: Dict[str, np.ndarray]) -> None:
         self._model_template = {k: v for k, v in model_template.items()}
@@ -106,6 +108,52 @@ class EAManager:
         self._elite_index = elite_idx
         self._last_selection_stats = sel_stats
         self.generation += 1
+
+    def update_elite_archive(self, archive_size: int = 5) -> Dict[str, float]:
+        """Keep a global top-k archive independent of current-generation drift."""
+        self._archive_size = max(0, int(archive_size))
+        if self._archive_size <= 0 or not self.population:
+            self._elite_archive = []
+            return {'archive_size': 0, 'archive_best': 0.0}
+        candidates = [ind.copy() for ind in self._elite_archive]
+        candidates.extend(ind.copy() for ind in self.population)
+        candidates.sort(key=lambda x: x.fitness, reverse=True)
+        unique = []
+        seen = set()
+        for ind in candidates:
+            key = (int(ind.seed), round(float(ind.fitness), 6))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(ind)
+            if len(unique) >= self._archive_size:
+                break
+        self._elite_archive = unique
+        best = self._elite_archive[0].fitness if self._elite_archive else 0.0
+        return {'archive_size': len(self._elite_archive), 'archive_best': float(best)}
+
+    def restore_elite_archive(self, copies: int = 1) -> int:
+        """Pin archived elites back into the active population after GA/migration."""
+        if not self._elite_archive or not self.population or int(copies) <= 0:
+            return 0
+        copies = min(int(copies), len(self._elite_archive), len(self.population))
+        self.population.sort(key=lambda x: x.fitness, reverse=True)
+        restored = 0
+        for idx in range(copies):
+            archived = self._elite_archive[idx].copy()
+            archived.id = self.population[idx].id
+            self.population[idx] = archived
+            restored += 1
+        self.population.sort(key=lambda x: x.fitness, reverse=True)
+        return restored
+
+    def get_archive_stats(self) -> Dict[str, float]:
+        if not self._elite_archive:
+            return {'archive_size': 0, 'archive_best': 0.0}
+        return {
+            'archive_size': len(self._elite_archive),
+            'archive_best': float(self._elite_archive[0].fitness),
+        }
 
     def boost_diversity(self, immigrant_fraction: float = 0.15,
                         mutation_rate: float = 0.25, mutation_strength: float = 0.15) -> int:
@@ -234,4 +282,5 @@ class EAManager:
             'ea_elite': self._last_selection_stats.get('elite', 0),
             'ea_winners': self._last_selection_stats.get('winners', 0),
             'ea_discarded': self._last_selection_stats.get('discarded', 0),
+            **self.get_archive_stats(),
         }

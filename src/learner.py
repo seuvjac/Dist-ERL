@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional
 from .utils.environment import get_env_info, make_env
 from .utils.replay_buffer import HybridReplayBuffer
 from .utils.policies import DDPGPolicy, TD3Policy, PPOPolicy
-from .utils.policy_utils import ActorEvaluator
+from .utils.policy_utils import ActorEvaluator, encode_action_for_buffer
 
 _GENOTYPE_PREFIXES = ('actor.', 'critic.', 'critic1.', 'critic2.')
 
@@ -41,6 +41,7 @@ class RLLearner:
         env_info = get_env_info(env_name)
         self.state_dim = env_info.get('state_dim')
         self.action_dim = env_info.get('action_dim')
+        self.action_space = env_info.get('action_space')
         self._actor_eval = ActorEvaluator(
             self.state_dim, self.action_dim, algorithm=self.algorithm)
 
@@ -74,7 +75,7 @@ class RLLearner:
         for i in range(n):
             self.replay_buffer.add_rl_data(
                 observation=observations[i],
-                action=actions[i],
+                action=encode_action_for_buffer(actions[i], self.action_space, self.action_dim),
                 reward=rewards[i],
                 next_observation=observations[i + 1] if i + 1 < len(observations) else observations[i],
                 done=dones[i],
@@ -90,7 +91,7 @@ class RLLearner:
         for i in range(n):
             self.replay_buffer.add_reproduced_ea_transition(
                 observation=observations[i],
-                action=actions[i],
+                action=encode_action_for_buffer(actions[i], self.action_space, self.action_dim),
                 reward=rewards[i],
                 next_observation=observations[i + 1] if i + 1 < len(observations) else observations[i],
                 done=dones[i],
