@@ -83,7 +83,7 @@ def parse_args():
     parser.add_argument('--client-heterogeneity', type=float, default=0.2,
                         help='Synthetic client MDP heterogeneity strength')
     parser.add_argument('--client-heterogeneity-mode', type=str, default='env_params',
-                        choices=['none', 'reward_action_noise', 'env_params'],
+                        choices=['none', 'reward_action_noise', 'env_params', 'env_params_only', 'mixed'],
                         help='How client-local MDP heterogeneity is applied')
     parser.add_argument('--fed-aggregation', type=str, default='softmax',
                         choices=['fitness', 'uniform', 'softmax'],

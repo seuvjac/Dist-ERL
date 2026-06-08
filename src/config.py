@@ -104,6 +104,27 @@ FEDRL_HETEROGENEOUS_ENVS = [
     'LunarLander-v3',
 ]
 
+FEDRL_HETEROGENEITY_SCENARIOS = {
+    'dynamics_mild': {
+        'mode': 'env_params_only',
+        'strength': 0.25,
+        'label': 'Mild dynamics shift',
+        'note': 'Client-specific gravity/mass/length/wind parameters only.',
+    },
+    'sensor_reward': {
+        'mode': 'reward_action_noise',
+        'strength': 0.35,
+        'label': 'Sensor/reward shift',
+        'note': 'Client-specific observation noise, reward scale/bias, and seed streams.',
+    },
+    'mixed_hard': {
+        'mode': 'mixed',
+        'strength': 0.50,
+        'label': 'Hard mixed shift',
+        'note': 'Dynamics shift plus observation/reward perturbations.',
+    },
+}
+
 
 def env_run_preset(env_id: str) -> dict:
     """Per-task defaults for distributed runs (population, workers, horizon)."""

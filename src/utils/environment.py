@@ -48,10 +48,11 @@ class HeterogeneousClientEnv(gym.Wrapper):
         self.heterogeneity = max(0.0, float(heterogeneity))
         self.mode = mode
         phase = ((self.client_id % 7) - 3) / 3.0
-        self.reward_scale = 1.0 + 0.15 * self.heterogeneity * phase
-        self.reward_bias = 0.02 * self.heterogeneity * phase
-        self.action_noise = 0.03 * self.heterogeneity * (1 + (self.client_id % 3))
-        self.observation_noise = 0.01 * self.heterogeneity * (1 + (self.client_id % 2))
+        noisy_mode = mode in ('reward_action_noise', 'mixed', 'env_params')
+        self.reward_scale = 1.0 + (0.15 * self.heterogeneity * phase if noisy_mode else 0.0)
+        self.reward_bias = 0.02 * self.heterogeneity * phase if noisy_mode else 0.0
+        self.action_noise = 0.03 * self.heterogeneity * (1 + (self.client_id % 3)) if noisy_mode else 0.0
+        self.observation_noise = 0.01 * self.heterogeneity * (1 + (self.client_id % 2)) if noisy_mode else 0.0
         self.seed_offset = self.client_id * 9973
         self._rng = np.random.default_rng(self.seed_offset)
 
@@ -162,7 +163,9 @@ def make_env(
     if client_id is not None:
         _apply_classic_control_heterogeneity(
             env, env_name, client_id, heterogeneity, heterogeneity_mode)
-    if client_id is not None and heterogeneity > 0:
+    if client_id is not None and heterogeneity > 0 and heterogeneity_mode in (
+        'reward_action_noise', 'mixed', 'env_params'
+    ):
         env = HeterogeneousClientEnv(env, client_id, heterogeneity, heterogeneity_mode)
     return env
 

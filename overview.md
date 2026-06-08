@@ -22,6 +22,16 @@ LunarLander-v3
 
 因此，本项目不再把 MuJoCo / Pendulum / 连续动作环境作为当前主实验对象。
 
+当前在每个原始环境上定义三种异质联邦场景：
+
+| 场景 | `client_heterogeneity_mode` | 强度 | 含义 |
+|------|-----------------------------|------|------|
+| `dynamics_mild` | `env_params_only` | `0.25` | 只改变客户端物理参数，如 gravity、mass、length、wind |
+| `sensor_reward` | `reward_action_noise` | `0.35` | 原始动力学不变，只改变观测噪声、reward scale/bias 和 seed stream |
+| `mixed_hard` | `mixed` | `0.50` | 同时改变动力学参数与观测/奖励扰动，作为最难异质场景 |
+
+这样可以区分三类问题：动力学 non-IID、感知/奖励 non-IID，以及混合强异质 non-IID。
+
 ## 2. 当前算法：FedEvoFSAC
 
 当前主方法是：
@@ -194,6 +204,19 @@ SB3-PPO
 
 ```bash
 ./run_fedrl_heterogeneous_suite.sh
+```
+
+三种异质联邦场景：
+
+```bash
+./run_fedrl_three_scenarios.sh
+```
+
+默认只跑 `FedEvoFSAC-full`，用于比较不同异质场景的影响；如果要同时跑消融，可以覆盖：
+
+```bash
+FED_VARIANTS="full uniform_aggregation no_local_rl no_ea_injection no_heterogeneity" \
+  ./run_fedrl_three_scenarios.sh
 ```
 
 只补跑 FedEvoFSAC：
