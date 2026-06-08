@@ -112,18 +112,28 @@ def _apply_classic_control_heterogeneity(
     strength = float(heterogeneity) * phase
     base = env.unwrapped
     if env_name == 'Acrobot-v1':
+        scale_boost = 2.0 if mode == 'mixed' else 1.0
         for attr, base_value, scale in (
-            ('LINK_LENGTH_1', 1.0, 0.20),
-            ('LINK_LENGTH_2', 1.0, -0.15),
-            ('LINK_MASS_1', 1.0, 0.20),
-            ('LINK_MASS_2', 1.0, -0.20),
-            ('LINK_COM_POS_1', 0.5, 0.15),
-            ('LINK_COM_POS_2', 0.5, -0.15),
+            ('LINK_LENGTH_1', 1.0, 0.35),
+            ('LINK_LENGTH_2', 1.0, -0.30),
+            ('LINK_MASS_1', 1.0, 0.35),
+            ('LINK_MASS_2', 1.0, -0.35),
+            ('LINK_COM_POS_1', 0.5, 0.25),
+            ('LINK_COM_POS_2', 0.5, -0.25),
         ):
             if hasattr(base, attr):
-                setattr(base, attr, base_value * (1.0 + scale * strength))
+                setattr(base, attr, base_value * max(0.25, 1.0 + scale * scale_boost * strength))
         if hasattr(base, 'g'):
-            base.g = 9.8 * (1.0 + 0.20 * strength)
+            base.g = 9.8 * max(0.50, 1.0 + 0.35 * scale_boost * strength)
+        if hasattr(base, 'AVAIL_TORQUE'):
+            torque_scale = max(0.35, 1.0 - 0.30 * scale_boost * strength)
+            base.AVAIL_TORQUE = [float(t * torque_scale) for t in (-1.0, 0.0, 1.0)]
+        if hasattr(base, 'MAX_VEL_1'):
+            base.MAX_VEL_1 = 4 * np.pi * max(0.50, 1.0 + 0.20 * scale_boost * strength)
+        if hasattr(base, 'MAX_VEL_2'):
+            base.MAX_VEL_2 = 9 * np.pi * max(0.50, 1.0 - 0.20 * scale_boost * strength)
+        if hasattr(base, 'dt'):
+            base.dt = 0.2 * max(0.50, 1.0 + 0.15 * scale_boost * strength)
         return
     if env_name != 'CartPole-v1':
         return

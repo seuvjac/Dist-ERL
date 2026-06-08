@@ -29,7 +29,7 @@ PY
 
   # Keep the first all-environment FedEvoRL pass tractable; raise overrides for final paper runs.
   POP=${FED_POPULATION_SIZE:-$(( POP < 12 ? POP : 12 ))}
-  CLIENTS=${FED_NUM_CLIENTS:-$(( CLIENTS < 2 ? CLIENTS : 2 ))}
+  CLIENTS=${FED_NUM_CLIENTS:-4}
   GENS=${FED_MAX_GENERATIONS:-$(( GENS < 20 ? GENS : 20 ))}
   EVAL_EPISODES=${FED_EVAL_EPISODES:-2}
   CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-1}

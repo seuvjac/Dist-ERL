@@ -27,6 +27,7 @@ print(p['population_size'], p['num_workers'], p['max_generations'], p['max_episo
 PY
 )"
   ALG=${FED_ALGORITHM:-"FSAC"}
+  CLIENTS=${NUM_WORKERS:-4}
   for SEED in $SEEDS; do
     for VARIANT in $FED_VARIANTS; do
       EXP="fedrlhet_${ENV_NAME}_${VARIANT}_s${SEED}"

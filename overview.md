@@ -17,7 +17,7 @@ LunarLander-v3
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
 | `CartPole-v1` | discrete | gravity、cart mass、pole mass、pole length、force magnitude、integration timestep、observation/reward/action perturbation |
-| `Acrobot-v1` | discrete | link length、link mass、center of mass、gravity |
+| `Acrobot-v1` | discrete | link length、link mass、center of mass、available torque、joint velocity limits、integration timestep、observation/reward/action perturbation |
 | `LunarLander-v3` | discrete | gravity、wind、turbulence |
 
 因此，本项目不再把 MuJoCo / Pendulum / 连续动作环境作为当前主实验对象。
@@ -244,6 +244,7 @@ FedAvg-DQN
 ```text
 CLIENT_HETEROGENEITY=0.60
 CLIENT_HETEROGENEITY_MODE=mixed
+NUM_WORKERS=4
 ```
 
 输出两类图：
