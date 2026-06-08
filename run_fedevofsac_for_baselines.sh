@@ -9,12 +9,15 @@ ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0"}
 FED_VARIANTS=${FED_VARIANTS:-"full uniform_aggregation no_local_rl no_ea_injection no_heterogeneity"}
 PAPER_MODES=${PAPER_MODES:-"paper_sac paper_fsac fedavg_sac fedsoftmax_sac_noea fedbest_sac fedmedian_sac fedtrimmedmean_sac attention_sac_lite"}
-EVO_BASELINES=${EVO_BASELINES:-"evosac_nofed"}
+EVO_BASELINES=${EVO_BASELINES:-""}
 DQN_BASELINES=${DQN_BASELINES:-"fedavg_dqn"}
-LOG_DIR=${LOG_DIR:-"logs_fedrl_hetero"}
-PAPER_LOG_DIR=${PAPER_LOG_DIR:-"logs_fsac_paper"}
-DQN_LOG_DIR=${DQN_LOG_DIR:-"logs_dqn_fedrl"}
-OUT_DIR=${OUT_DIR:-"plots/fedrl_heterogeneous"}
+LOG_DIR=${LOG_DIR:-"logs_fedrl_hetero_mixed"}
+PAPER_LOG_DIR=${PAPER_LOG_DIR:-"logs_fsac_paper_mixed"}
+DQN_LOG_DIR=${DQN_LOG_DIR:-"logs_dqn_fedrl_mixed"}
+COMPARISON_OUT_DIR=${COMPARISON_OUT_DIR:-"plots/fedrl_comparison_mixed"}
+ABLATION_OUT_DIR=${ABLATION_OUT_DIR:-"plots/fedrl_ablations_mixed"}
+CLIENT_HETEROGENEITY=${CLIENT_HETEROGENEITY:-"0.60"}
+CLIENT_HETEROGENEITY_MODE=${CLIENT_HETEROGENEITY_MODE:-"mixed"}
 
 for ENV_NAME in $ENVS; do
   read POP CLIENTS GENS STEPS <<<"$(python3 - <<PY
@@ -45,8 +48,8 @@ PY
         --num-clients "$CLIENTS" \
         --max-generations "$GENS" \
         --max-episode-steps "$STEPS" \
-        --client-heterogeneity 0.35 \
-        --client-heterogeneity-mode env_params \
+        --client-heterogeneity "$CLIENT_HETEROGENEITY" \
+        --client-heterogeneity-mode "$CLIENT_HETEROGENEITY_MODE" \
         --fed-aggregation softmax \
         --fed-aggregation-interval 5 \
         --fed-aggregation-temperature 75 \
@@ -95,6 +98,8 @@ PY
         --batch-size 32 \
         --eval-episodes "$EVAL_EPISODES" \
         --max-episode-steps "$STEPS" \
+        --client-heterogeneity "$CLIENT_HETEROGENEITY" \
+        --client-heterogeneity-mode "$CLIENT_HETEROGENEITY_MODE" \
         --log-dir "$PAPER_LOG_DIR" \
         --exp-name "$EXP" \
         --baseline-mode "$PAPER_MODE"
@@ -114,6 +119,8 @@ PY
         --batch-size 32 \
         --eval-episodes "$EVAL_EPISODES" \
         --max-episode-steps "$STEPS" \
+        --client-heterogeneity "$CLIENT_HETEROGENEITY" \
+        --client-heterogeneity-mode "$CLIENT_HETEROGENEITY_MODE" \
         --log-dir "$DQN_LOG_DIR" \
         --exp-name "$EXP"
     done
@@ -124,4 +131,12 @@ python3 scripts/plot_fedrl_heterogeneous.py \
   --fed-log-dir "$LOG_DIR" \
   --paper-log-dir "$PAPER_LOG_DIR" \
   --dqn-log-dir "$DQN_LOG_DIR" \
-  --out-dir "$OUT_DIR"
+  --out-dir "$COMPARISON_OUT_DIR" \
+  --plot-kind comparison
+
+python3 scripts/plot_fedrl_heterogeneous.py \
+  --fed-log-dir "$LOG_DIR" \
+  --paper-log-dir "" \
+  --dqn-log-dir "" \
+  --out-dir "$ABLATION_OUT_DIR" \
+  --plot-kind ablation

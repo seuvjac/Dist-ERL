@@ -16,7 +16,7 @@ LunarLander-v3
 
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
-| `CartPole-v1` | discrete | gravity、cart mass、pole mass、pole length |
+| `CartPole-v1` | discrete | gravity、cart mass、pole mass、pole length、force magnitude、integration timestep、observation/reward/action perturbation |
 | `Acrobot-v1` | discrete | link length、link mass、center of mass、gravity |
 | `LunarLander-v3` | discrete | gravity、wind、turbulence |
 
@@ -28,7 +28,7 @@ LunarLander-v3
 |------|-----------------------------|------|------|
 | `dynamics_mild` | `env_params_only` | `0.25` | 只改变客户端物理参数，如 gravity、mass、length、wind |
 | `sensor_reward` | `reward_action_noise` | `0.35` | 原始动力学不变，只改变观测噪声、reward scale/bias 和 seed stream |
-| `mixed_hard` | `mixed` | `0.50` | 同时改变动力学参数与观测/奖励扰动，作为最难异质场景 |
+| `mixed_hard` | `mixed` | `0.50` | 同时改变动力学参数与观测/奖励/动作扰动，作为最难异质场景 |
 
 这样可以区分三类问题：动力学 non-IID、感知/奖励 non-IID，以及混合强异质 non-IID。
 
@@ -202,10 +202,9 @@ FedMedian-SAC
 FedTrimmedMean-SAC
 Attention-SAC-lite
 FedAvg-DQN
-EvoSAC-noFed
 ```
 
-说明：当前实验不再把 SB3 放入主对照组。主算法维持使用 `FedEvoFSAC`；对照保留同一算法族内的 SAC / FSAC / EvoSAC 变体，这样能更直接地检验“联邦共享”“聚合策略”和“EA actor 进化”分别带来的影响。
+说明：当前实验不再把 SB3 和 `EvoSAC-noFed` 放入主横向对照组。主算法维持使用 `FedEvoFSAC`；横向对照只保留 SAC / FSAC / DQN 系联邦方法。FedEvoFSAC 的模块消融单独出图，不和其他算法混在同一张横向对比图里。
 
 各对照组含义：
 
@@ -220,7 +219,6 @@ EvoSAC-noFed
 | `FedTrimmedMean-SAC` | client actor 做逐参数 trimmed mean 聚合，critic 保持本地 | 比 median 更平滑的鲁棒聚合是否更稳 |
 | `Attention-SAC-lite` | 用 performance index 和 actor 距离构造 attention 权重聚合 actor | 参考 FedFormer，context-aware federation 是否优于简单平均 |
 | `FedAvg-DQN` | 多 worker 本地 DQN，周期性 FedAvg 聚合 Q-network | 参考 Federated-DRL，DQN 系联邦方法和 SAC 系方法的差异 |
-| `EvoSAC-noFed` | EA + SAC，但不做联邦 client 聚合 | EA 本身是否有效，和 FedEvoFSAC 的联邦部分解耦 |
 
 论文里的 FSAC 复现为本项目的 `Paper-FSAC`：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。
 
@@ -239,6 +237,20 @@ EvoSAC-noFed
 
 ```bash
 ./run_fedrl_heterogeneous_suite.sh
+```
+
+该脚本默认使用更强的异质设定：
+
+```text
+CLIENT_HETEROGENEITY=0.60
+CLIENT_HETEROGENEITY_MODE=mixed
+```
+
+输出两类图：
+
+```text
+plots/fedrl_comparison_mixed   # FedEvoFSAC-full vs SAC/FSAC/DQN 横向算法对比
+plots/fedrl_ablations_mixed    # FedEvoFSAC 内部消融
 ```
 
 三种异质联邦场景：

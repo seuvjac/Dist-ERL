@@ -17,6 +17,9 @@ def parse_args():
     p.add_argument('--dqn-log-dir', default='logs_dqn_fedrl')
     p.add_argument('--out-dir', default='plots/fedrl_heterogeneous')
     p.add_argument('--envs', nargs='*', default=None)
+    p.add_argument('--plot-kind', default='comparison',
+                   choices=['comparison', 'ablation', 'all'],
+                   help='comparison excludes FedEvoFSAC ablations and EvoSAC-noFed; ablation plots only FedEvoFSAC variants')
     return p.parse_args()
 
 
@@ -29,7 +32,7 @@ def _num(v):
         return np.nan
 
 
-def load_runs(log_dirs):
+def load_runs(log_dirs, plot_kind='comparison'):
     runs = []
     for log_dir in log_dirs:
         root = Path(log_dir)
@@ -58,6 +61,16 @@ def load_runs(log_dirs):
             if str(mode).startswith('sb3_'):
                 continue
             fed_abl = meta.get('fed_ablation', 'n/a')
+
+            if plot_kind == 'comparison':
+                if mode == 'fed_evo_rl' and fed_abl != 'full':
+                    continue
+                if mode == 'standard_erl' and meta.get('algorithm') == 'FSAC':
+                    continue
+            elif plot_kind == 'ablation':
+                if mode != 'fed_evo_rl':
+                    continue
+
             label = mode
             if mode == 'fed_evo_rl':
                 label = f"FedEvoFSAC-{fed_abl}"
@@ -100,7 +113,7 @@ def main():
         log_dirs.append(args.paper_log_dir)
     if args.dqn_log_dir:
         log_dirs.append(args.dqn_log_dir)
-    runs = load_runs(log_dirs)
+    runs = load_runs(log_dirs, plot_kind=args.plot_kind)
     envs = args.envs or sorted({r['env'] for r in runs})
     colors = {
         'FedEvoFSAC-full': '#D55E00',
@@ -135,7 +148,11 @@ def main():
             ax.plot(xs, y, label=f"{label} (n={len(group)})", color=colors.get(label), linewidth=2)
             if len(group) > 1:
                 ax.fill_between(xs, y - s, y + s, color=colors.get(label), alpha=0.14)
-        ax.set_title(f'{env}: FedEvoFSAC vs SAC/FSAC baselines')
+        if args.plot_kind == 'ablation':
+            title = f'{env}: FedEvoFSAC ablations'
+        else:
+            title = f'{env}: FedEvoFSAC vs FedRL baselines'
+        ax.set_title(title)
         ax.set_xlabel('Environment steps')
         ax.set_ylabel('Best evaluation score')
         ax.grid(alpha=0.3)

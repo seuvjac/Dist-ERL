@@ -65,6 +65,9 @@ class HeterogeneousClientEnv(gym.Wrapper):
         if self.action_noise > 0 and hasattr(self.action_space, 'low'):
             noise = self._rng.normal(0.0, self.action_noise, np.shape(action))
             action = np.clip(action + noise, self.action_space.low, self.action_space.high)
+        elif self.action_noise > 0 and hasattr(self.action_space, 'n'):
+            if self._rng.random() < self.action_noise:
+                action = int(self._rng.integers(self.action_space.n))
         obs, reward, terminated, truncated, info = self.env.step(action)
         reward = float(reward) * self.reward_scale + self.reward_bias
         return self._perturb_observation(obs), reward, terminated, truncated, info
@@ -124,14 +127,19 @@ def _apply_classic_control_heterogeneity(
         return
     if env_name != 'CartPole-v1':
         return
+    scale_boost = 2.0 if mode == 'mixed' else 1.0
     if hasattr(base, 'gravity'):
-        base.gravity = 9.8 * (1.0 + 0.15 * strength)
+        base.gravity = 9.8 * (1.0 + 0.22 * scale_boost * strength)
     if hasattr(base, 'masscart'):
-        base.masscart = 1.0 * (1.0 + 0.20 * strength)
+        base.masscart = 1.0 * max(0.35, 1.0 + 0.30 * scale_boost * strength)
     if hasattr(base, 'masspole'):
-        base.masspole = 0.1 * (1.0 - 0.20 * strength)
+        base.masspole = 0.1 * max(0.30, 1.0 - 0.30 * scale_boost * strength)
     if hasattr(base, 'length'):
-        base.length = 0.5 * (1.0 + 0.25 * strength)
+        base.length = 0.5 * max(0.30, 1.0 + 0.40 * scale_boost * strength)
+    if hasattr(base, 'force_mag'):
+        base.force_mag = 10.0 * max(0.35, 1.0 - 0.25 * scale_boost * strength)
+    if hasattr(base, 'tau'):
+        base.tau = 0.02 * max(0.50, 1.0 + 0.15 * scale_boost * strength)
     if hasattr(base, 'masscart') and hasattr(base, 'masspole'):
         base.total_mass = base.masscart + base.masspole
     if hasattr(base, 'masspole') and hasattr(base, 'length'):
