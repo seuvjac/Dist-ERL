@@ -100,8 +100,13 @@ def parse_args():
     p.add_argument('--log-dir', default='logs_fsac_paper')
     p.add_argument('--exp-name', default=None)
     p.add_argument('--baseline-mode', default=None,
-                   choices=['paper_sac', 'paper_fsac', 'fedavg_fsac',
-                            'fedsoftmax_fsac_noea', 'fedbest_fsac'],
+                   choices=['paper_sac', 'paper_fsac',
+                            'fedavg_sac', 'fedsoftmax_sac_noea', 'fedbest_sac',
+                            'fedmedian_sac', 'fedtrimmedmean_sac',
+                            'attention_sac_lite',
+                            'fedavg_fsac', 'fedsoftmax_fsac_noea', 'fedbest_fsac',
+                            'fedmedian_fsac', 'fedtrimmedmean_fsac',
+                            'attention_fsac_lite'],
                    help='SAC/FSAC baseline variant. Overrides --federated flags.')
     p.add_argument('--federated', action='store_true',
                    help='Legacy alias for --baseline-mode paper_fsac')
@@ -154,8 +159,59 @@ def _average_actor_states(states, weights) -> dict:
     }
 
 
+def _median_actor_state(states) -> dict:
+    return {
+        key: torch.median(torch.stack([state[key] for state in states], dim=0), dim=0).values
+        for key in states[0]
+    }
+
+
+def _trimmed_mean_actor_state(states, trim_ratio: float = 0.2) -> dict:
+    n_states = len(states)
+    trim = int(np.floor(n_states * trim_ratio))
+    result = {}
+    for key in states[0]:
+        stacked = torch.stack([state[key] for state in states], dim=0)
+        if trim > 0 and n_states > 2 * trim:
+            sorted_vals = torch.sort(stacked, dim=0).values
+            stacked = sorted_vals[trim:n_states - trim]
+        result[key] = stacked.mean(dim=0)
+    return result
+
+
+def _actor_distance(state_a: dict, state_b: dict) -> float:
+    total = 0.0
+    for key in state_a:
+        diff = state_a[key] - state_b[key]
+        total += float(torch.sum(diff * diff).item())
+    return float(np.sqrt(max(total, 0.0)))
+
+
+def _attention_weights(states, scores: np.ndarray, best_state: dict,
+                       temperature: float) -> np.ndarray:
+    distances = np.asarray([_actor_distance(state, best_state) for state in states], dtype=np.float64)
+    scale = np.median(distances[distances > 0]) if np.any(distances > 0) else 1.0
+    context_bonus = -distances / max(float(scale), 1e-6)
+    logits = np.asarray(scores, dtype=np.float64) / max(float(temperature), 1e-6) + context_bonus
+    logits -= np.max(logits)
+    weights = np.exp(logits)
+    total = np.sum(weights)
+    if not np.isfinite(total) or total <= 0:
+        return np.ones_like(logits) / len(logits)
+    return weights / total
+
+
 def _sync_actor_baseline(policies, perf_index: np.ndarray, mode: str,
                          temperature: float) -> float:
+    legacy_aliases = {
+        'fedavg_fsac': 'fedavg_sac',
+        'fedsoftmax_fsac_noea': 'fedsoftmax_sac_noea',
+        'fedbest_fsac': 'fedbest_sac',
+        'fedmedian_fsac': 'fedmedian_sac',
+        'fedtrimmedmean_fsac': 'fedtrimmedmean_sac',
+        'attention_fsac_lite': 'attention_sac_lite',
+    }
+    mode = legacy_aliases.get(mode, mode)
     if mode == 'paper_sac':
         return 0.0
 
@@ -173,15 +229,27 @@ def _sync_actor_baseline(policies, perf_index: np.ndarray, mode: str,
                 policy, best_state, float(perf_index[wid]), best_pi, temperature))
         return float(np.mean(entropies)) if entropies else 0.0
 
-    if mode == 'fedbest_fsac':
+    if mode == 'fedbest_sac':
         for policy in policies:
             _load_actor_state(policy, best_state)
         return 0.0
 
-    if mode == 'fedavg_fsac':
+    if mode == 'fedavg_sac':
         weights = np.ones(len(policies), dtype=np.float64) / len(policies)
-    elif mode == 'fedsoftmax_fsac_noea':
+    elif mode == 'fedsoftmax_sac_noea':
         weights = _softmax_weights(perf_index, temperature)
+    elif mode == 'attention_sac_lite':
+        weights = _attention_weights(states, perf_index, best_state, temperature)
+    elif mode == 'fedmedian_sac':
+        global_state = _median_actor_state(states)
+        for policy in policies:
+            _load_actor_state(policy, global_state)
+        return 0.0
+    elif mode == 'fedtrimmedmean_sac':
+        global_state = _trimmed_mean_actor_state(states)
+        for policy in policies:
+            _load_actor_state(policy, global_state)
+        return 0.0
     else:
         raise ValueError(f'unknown baseline mode: {mode}')
 

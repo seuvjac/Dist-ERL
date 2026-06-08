@@ -5,7 +5,7 @@ set -euo pipefail
 
 ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0 1 2"}
-MODES=${MODES:-"paper_sac paper_fsac fedavg_fsac fedsoftmax_fsac_noea fedbest_fsac"}
+MODES=${MODES:-"paper_sac paper_fsac fedavg_sac fedsoftmax_sac_noea fedbest_sac fedmedian_sac fedtrimmedmean_sac attention_sac_lite"}
 ROUNDS=${ROUNDS:-120}
 NUM_WORKERS=${NUM_WORKERS:-5}
 LOG_DIR=${LOG_DIR:-"logs_fsac_paper"}

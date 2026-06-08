@@ -14,6 +14,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument('--fed-log-dir', default='logs_fedrl_hetero')
     p.add_argument('--paper-log-dir', default='logs_fsac_paper')
+    p.add_argument('--dqn-log-dir', default='logs_dqn_fedrl')
     p.add_argument('--out-dir', default='plots/fedrl_heterogeneous')
     p.add_argument('--envs', nargs='*', default=None)
     return p.parse_args()
@@ -66,12 +67,20 @@ def load_runs(log_dirs):
                 label = 'Paper-FSAC'
             elif mode == 'paper_sac':
                 label = 'Paper-SAC'
-            elif mode == 'fedavg_fsac':
-                label = 'FedAvg-FSAC'
-            elif mode == 'fedsoftmax_fsac_noea':
-                label = 'FedSoftmax-FSAC-noEA'
-            elif mode == 'fedbest_fsac':
-                label = 'FedBest-FSAC'
+            elif mode in ('fedavg_sac', 'fedavg_fsac'):
+                label = 'FedAvg-SAC'
+            elif mode in ('fedsoftmax_sac_noea', 'fedsoftmax_fsac_noea'):
+                label = 'FedSoftmax-SAC-noEA'
+            elif mode in ('fedbest_sac', 'fedbest_fsac'):
+                label = 'FedBest-SAC'
+            elif mode in ('fedmedian_sac', 'fedmedian_fsac'):
+                label = 'FedMedian-SAC'
+            elif mode in ('fedtrimmedmean_sac', 'fedtrimmedmean_fsac'):
+                label = 'FedTrimmedMean-SAC'
+            elif mode in ('attention_sac_lite', 'attention_fsac_lite'):
+                label = 'Attention-SAC-lite'
+            elif mode == 'fedavg_dqn':
+                label = 'FedAvg-DQN'
             runs.append({
                 'env': meta.get('env', 'unknown'),
                 'label': label,
@@ -89,6 +98,8 @@ def main():
     log_dirs = [args.fed_log_dir]
     if args.paper_log_dir:
         log_dirs.append(args.paper_log_dir)
+    if args.dqn_log_dir:
+        log_dirs.append(args.dqn_log_dir)
     runs = load_runs(log_dirs)
     envs = args.envs or sorted({r['env'] for r in runs})
     colors = {
@@ -99,10 +110,14 @@ def main():
         'FedEvoFSAC-no_heterogeneity': '#CC79A7',
         'Paper-FSAC': '#56B4E9',
         'Paper-SAC': '#999999',
-        'FedAvg-FSAC': '#0072B2',
-        'FedSoftmax-FSAC-noEA': '#009E73',
-        'FedBest-FSAC': '#E69F00',
+        'FedAvg-SAC': '#0072B2',
+        'FedSoftmax-SAC-noEA': '#009E73',
+        'FedBest-SAC': '#E69F00',
         'EvoSAC-noFed': '#CC79A7',
+        'FedMedian-SAC': '#332288',
+        'FedTrimmedMean-SAC': '#882255',
+        'Attention-SAC-lite': '#44AA99',
+        'FedAvg-DQN': '#117733',
     }
     for env in envs:
         env_runs = [r for r in runs if r['env'] == env]

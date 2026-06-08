@@ -8,10 +8,12 @@ export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0 1 2"}
 FED_VARIANTS=${FED_VARIANTS:-"full uniform_aggregation no_local_rl no_ea_injection no_heterogeneity"}
-PAPER_MODES=${PAPER_MODES:-"paper_sac paper_fsac fedavg_fsac fedsoftmax_fsac_noea fedbest_fsac"}
+PAPER_MODES=${PAPER_MODES:-"paper_sac paper_fsac fedavg_sac fedsoftmax_sac_noea fedbest_sac fedmedian_sac fedtrimmedmean_sac attention_sac_lite"}
 EVO_BASELINES=${EVO_BASELINES:-"evosac_nofed"}
+DQN_BASELINES=${DQN_BASELINES:-"fedavg_dqn"}
 LOG_DIR=${LOG_DIR:-"logs_fedrl_hetero"}
 PAPER_LOG_DIR=${PAPER_LOG_DIR:-"logs_fsac_paper"}
+DQN_LOG_DIR=${DQN_LOG_DIR:-"logs_dqn_fedrl"}
 
 for ENV_NAME in $ENVS; do
   read POP CLIENTS GENS STEPS <<<"$(python3 - <<PY
@@ -83,9 +85,27 @@ PY
         --log-dir "$LOG_DIR" \
         --exp-name "$EXP"
     done
+    for DQN_MODE in $DQN_BASELINES; do
+      if [[ "$DQN_MODE" != "fedavg_dqn" ]]; then
+        echo "Unknown DQN baseline: $DQN_MODE" >&2
+        exit 1
+      fi
+      EXP="${DQN_MODE}_${ENV_NAME}_s${SEED}"
+      python3 scripts/train_fedavg_dqn_baseline.py \
+        --env "$ENV_NAME" \
+        --seed "$SEED" \
+        --rounds "$GENS" \
+        --num-workers "$CLIENTS" \
+        --updates 8 \
+        --eval-episodes 4 \
+        --max-episode-steps "$STEPS" \
+        --log-dir "$DQN_LOG_DIR" \
+        --exp-name "$EXP"
+    done
   done
 done
 
 python3 scripts/plot_fedrl_heterogeneous.py \
   --fed-log-dir "$LOG_DIR" \
-  --paper-log-dir "$PAPER_LOG_DIR"
+  --paper-log-dir "$PAPER_LOG_DIR" \
+  --dqn-log-dir "$DQN_LOG_DIR"

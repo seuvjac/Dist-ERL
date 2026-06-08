@@ -195,9 +195,13 @@ FedEvoFSAC-no_heterogeneity
 ```text
 Paper-SAC
 Paper-FSAC
-FedAvg-FSAC
-FedSoftmax-FSAC-noEA
-FedBest-FSAC
+FedAvg-SAC
+FedSoftmax-SAC-noEA
+FedBest-SAC
+FedMedian-SAC
+FedTrimmedMean-SAC
+Attention-SAC-lite
+FedAvg-DQN
 EvoSAC-noFed
 ```
 
@@ -209,12 +213,25 @@ EvoSAC-noFed
 |------|------|----------------|
 | `Paper-SAC` | 多 worker 本地 discrete SAC，不共享 actor | 没有联邦共享时 SAC 的表现 |
 | `Paper-FSAC` | 论文式 FSAC：最优 worker actor 与本地 actor 做 Boltzmann blending | 论文式 best-worker 共享是否有效 |
-| `FedAvg-FSAC` | client actor 做均匀平均，critic 保持本地 | 普通 FedAvg actor 聚合是否足够 |
-| `FedSoftmax-FSAC-noEA` | client actor 按 performance index softmax 加权聚合，无 EA | reward-aware federation 在没有 EA 时的贡献 |
-| `FedBest-FSAC` | 每轮将最优 worker actor 广播给所有 worker | 贪心 best-worker 共享是否稳定 |
+| `FedAvg-SAC` | client actor 做均匀平均，critic 保持本地 | 普通 FedAvg actor 聚合是否足够 |
+| `FedSoftmax-SAC-noEA` | client actor 按 performance index softmax 加权聚合，无 EA | reward-aware federation 在没有 EA 时的贡献 |
+| `FedBest-SAC` | 每轮将最优 worker actor 广播给所有 worker | 贪心 best-worker 共享是否稳定 |
+| `FedMedian-SAC` | client actor 做逐参数 median 聚合，critic 保持本地 | 参考 fault-tolerant / Byzantine FedRL，鲁棒聚合能否改善异质 client |
+| `FedTrimmedMean-SAC` | client actor 做逐参数 trimmed mean 聚合，critic 保持本地 | 比 median 更平滑的鲁棒聚合是否更稳 |
+| `Attention-SAC-lite` | 用 performance index 和 actor 距离构造 attention 权重聚合 actor | 参考 FedFormer，context-aware federation 是否优于简单平均 |
+| `FedAvg-DQN` | 多 worker 本地 DQN，周期性 FedAvg 聚合 Q-network | 参考 Federated-DRL，DQN 系联邦方法和 SAC 系方法的差异 |
 | `EvoSAC-noFed` | EA + SAC，但不做联邦 client 聚合 | EA 本身是否有效，和 FedEvoFSAC 的联邦部分解耦 |
 
 论文里的 FSAC 复现为本项目的 `Paper-FSAC`：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。
+
+已下载的同类代码只作为算法思想和工程参考，不直接混入主图原始结果；主图中的曲线统一用本项目的三环境、FSAC 网络、日志和评估协议生成：
+
+| 外部代码 | 实际 RL 主体 | 本地路径 | 对应到本项目的曲线 |
+|----------|--------------|----------|--------------------|
+| FedFormer | SAC | `/home/ywj/code/FedFormer` | `Attention-SAC-lite` |
+| Byzantine-Federated-RL / FedPG-BR | policy gradient | `/home/ywj/code/Byzantine-Federated-RL` | `FedMedian-SAC`, `FedTrimmedMean-SAC` 作为鲁棒聚合思想对照 |
+| Federated-DRL | DQN / DDQN | `/home/ywj/code/Federated-DRL` | `FedAvg-DQN` |
+| FederatedRL | PPO | `/home/ywj/code/FederatedRL` | related work，不进主图 |
 
 ## 10. 实验脚本
 
