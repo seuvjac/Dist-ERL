@@ -8,6 +8,7 @@ export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0"}
 FED_VARIANTS=${FED_VARIANTS:-"full uniform_aggregation no_local_rl no_ea_injection no_heterogeneity"}
+EVO_BASELINES=${EVO_BASELINES:-"evosac_nofed"}
 LOG_DIR=${LOG_DIR:-"logs_fedrl_hetero"}
 PAPER_LOG_DIR=${PAPER_LOG_DIR:-"logs_fsac_paper"}
 OUT_DIR=${OUT_DIR:-"plots/fedrl_heterogeneous"}
@@ -52,6 +53,28 @@ PY
         --elite-archive-restore-copies 1 \
         --client-rollouts "$CLIENT_ROLLOUTS" \
         --client-updates "$CLIENT_UPDATES" \
+        --batch-size 32 \
+        --eval-episodes "$EVAL_EPISODES" \
+        --seed "$SEED" \
+        --log-dir "$LOG_DIR" \
+        --exp-name "$EXP"
+    done
+    for EVO_MODE in $EVO_BASELINES; do
+      if [[ "$EVO_MODE" != "evosac_nofed" ]]; then
+        echo "Unknown EVO baseline: $EVO_MODE" >&2
+        exit 1
+      fi
+      EXP="${EVO_MODE}_${ENV_NAME}_s${SEED}"
+      python3 -m src.main \
+        --env "$ENV_NAME" \
+        --mode standard_erl \
+        --algorithm "$ALG" \
+        --population-size "$POP" \
+        --num-workers "$CLIENTS" \
+        --max-generations "$GENS" \
+        --max-episode-steps "$STEPS" \
+        --rl-rollouts "$CLIENT_ROLLOUTS" \
+        --rl-updates "$CLIENT_UPDATES" \
         --batch-size 32 \
         --eval-episodes "$EVAL_EPISODES" \
         --seed "$SEED" \

@@ -60,10 +60,18 @@ def load_runs(log_dirs):
             label = mode
             if mode == 'fed_evo_rl':
                 label = f"FedEvoFSAC-{fed_abl}"
+            elif mode == 'standard_erl' and meta.get('algorithm') == 'FSAC':
+                label = 'EvoSAC-noFed'
             elif mode == 'paper_fsac':
                 label = 'Paper-FSAC'
             elif mode == 'paper_sac':
                 label = 'Paper-SAC'
+            elif mode == 'fedavg_fsac':
+                label = 'FedAvg-FSAC'
+            elif mode == 'fedsoftmax_fsac_noea':
+                label = 'FedSoftmax-FSAC-noEA'
+            elif mode == 'fedbest_fsac':
+                label = 'FedBest-FSAC'
             runs.append({
                 'env': meta.get('env', 'unknown'),
                 'label': label,
@@ -91,6 +99,10 @@ def main():
         'FedEvoFSAC-no_heterogeneity': '#CC79A7',
         'Paper-FSAC': '#56B4E9',
         'Paper-SAC': '#999999',
+        'FedAvg-FSAC': '#0072B2',
+        'FedSoftmax-FSAC-noEA': '#009E73',
+        'FedBest-FSAC': '#E69F00',
+        'EvoSAC-noFed': '#CC79A7',
     }
     for env in envs:
         env_runs = [r for r in runs if r['env'] == env]

@@ -8,7 +8,8 @@ export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0 1 2"}
 FED_VARIANTS=${FED_VARIANTS:-"full uniform_aggregation no_local_rl no_ea_injection no_heterogeneity"}
-PAPER_MODES=${PAPER_MODES:-"paper_fsac paper_sac"}
+PAPER_MODES=${PAPER_MODES:-"paper_sac paper_fsac fedavg_fsac fedsoftmax_fsac_noea fedbest_fsac"}
+EVO_BASELINES=${EVO_BASELINES:-"evosac_nofed"}
 LOG_DIR=${LOG_DIR:-"logs_fedrl_hetero"}
 PAPER_LOG_DIR=${PAPER_LOG_DIR:-"logs_fsac_paper"}
 
@@ -49,10 +50,6 @@ PY
         --exp-name "$EXP"
     done
     for PAPER_MODE in $PAPER_MODES; do
-      FLAG="--federated"
-      if [[ "$PAPER_MODE" == "paper_sac" ]]; then
-        FLAG="--no-federation"
-      fi
       EXP="${PAPER_MODE}_${ENV_NAME}_s${SEED}"
       python3 scripts/train_fsac_paper_baseline.py \
         --env "$ENV_NAME" \
@@ -63,7 +60,28 @@ PY
         --max-episode-steps "$STEPS" \
         --log-dir "$PAPER_LOG_DIR" \
         --exp-name "$EXP" \
-        $FLAG
+        --baseline-mode "$PAPER_MODE"
+    done
+    for EVO_MODE in $EVO_BASELINES; do
+      if [[ "$EVO_MODE" != "evosac_nofed" ]]; then
+        echo "Unknown EVO baseline: $EVO_MODE" >&2
+        exit 1
+      fi
+      EXP="${EVO_MODE}_${ENV_NAME}_s${SEED}"
+      python3 -m src.main \
+        --env "$ENV_NAME" \
+        --mode standard_erl \
+        --algorithm "$ALG" \
+        --population-size "$POP" \
+        --num-workers "$CLIENTS" \
+        --max-generations "$GENS" \
+        --max-episode-steps "$STEPS" \
+        --rl-rollouts 2 \
+        --rl-updates 8 \
+        --eval-episodes 4 \
+        --seed "$SEED" \
+        --log-dir "$LOG_DIR" \
+        --exp-name "$EXP"
     done
   done
 done

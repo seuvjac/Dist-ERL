@@ -195,9 +195,26 @@ FedEvoFSAC-no_heterogeneity
 ```text
 Paper-SAC
 Paper-FSAC
+FedAvg-FSAC
+FedSoftmax-FSAC-noEA
+FedBest-FSAC
+EvoSAC-noFed
 ```
 
-说明：当前实验不再把 SB3 放入主对照组。主算法维持使用 `FedEvoFSAC`；对照只保留同一算法族内的 `Paper-SAC` 和 `Paper-FSAC`，这样能更直接地检验“联邦共享”和“EA actor 进化”分别带来的影响。论文里的 FSAC 复现为本项目的 `Paper-FSAC`：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。`Paper-SAC` 是去掉联邦共享后的独立多 worker SAC。
+说明：当前实验不再把 SB3 放入主对照组。主算法维持使用 `FedEvoFSAC`；对照保留同一算法族内的 SAC / FSAC / EvoSAC 变体，这样能更直接地检验“联邦共享”“聚合策略”和“EA actor 进化”分别带来的影响。
+
+各对照组含义：
+
+| 曲线 | 含义 | 主要回答的问题 |
+|------|------|----------------|
+| `Paper-SAC` | 多 worker 本地 discrete SAC，不共享 actor | 没有联邦共享时 SAC 的表现 |
+| `Paper-FSAC` | 论文式 FSAC：最优 worker actor 与本地 actor 做 Boltzmann blending | 论文式 best-worker 共享是否有效 |
+| `FedAvg-FSAC` | client actor 做均匀平均，critic 保持本地 | 普通 FedAvg actor 聚合是否足够 |
+| `FedSoftmax-FSAC-noEA` | client actor 按 performance index softmax 加权聚合，无 EA | reward-aware federation 在没有 EA 时的贡献 |
+| `FedBest-FSAC` | 每轮将最优 worker actor 广播给所有 worker | 贪心 best-worker 共享是否稳定 |
+| `EvoSAC-noFed` | EA + SAC，但不做联邦 client 聚合 | EA 本身是否有效，和 FedEvoFSAC 的联邦部分解耦 |
+
+论文里的 FSAC 复现为本项目的 `Paper-FSAC`：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。
 
 ## 10. 实验脚本
 
@@ -277,7 +294,7 @@ python -m src.main \
 - delta clipping 与 bounded EA mutation；
 - global elite archive；
 - FedEvoFSAC 消融脚本；
-- Paper-SAC / Paper-FSAC baseline 和对比绘图。
+- SAC / FSAC / EvoSAC baseline 和对比绘图。
 
 主要风险：
 

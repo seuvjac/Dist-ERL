@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Reproduce a paper-style federated discrete SAC baseline.
+"""Train discrete SAC/FSAC baselines for FedEvoFSAC comparisons.
 
-This baseline keeps local SAC critics on each worker and periodically blends
-each worker actor with the current best worker actor using reward-derived
-Boltzmann weights. It is intended as a clean comparison target for FedEvoFSAC.
+These baselines keep local SAC critics on each worker and only synchronize
+actor parameters. They are intended as clean comparison targets for FedEvoFSAC.
 """
 
 import argparse
@@ -100,8 +99,12 @@ def parse_args():
     p.add_argument('--eval-episodes', type=int, default=5)
     p.add_argument('--log-dir', default='logs_fsac_paper')
     p.add_argument('--exp-name', default=None)
+    p.add_argument('--baseline-mode', default=None,
+                   choices=['paper_sac', 'paper_fsac', 'fedavg_fsac',
+                            'fedsoftmax_fsac_noea', 'fedbest_fsac'],
+                   help='SAC/FSAC baseline variant. Overrides --federated flags.')
     p.add_argument('--federated', action='store_true',
-                   help='Enable best-worker actor sharing')
+                   help='Legacy alias for --baseline-mode paper_fsac')
     p.add_argument('--no-federation', dest='federated', action='store_false')
     p.set_defaults(federated=True)
     return p.parse_args()
@@ -128,6 +131,63 @@ def _blend_with_best(policy: FSACPolicy, best_state: dict, worker_pi: float,
         for k in local_state
     }
     _load_actor_state(policy, mixed)
+    return float(-(weights * np.log(weights + 1e-12)).sum())
+
+
+def _softmax_weights(scores: np.ndarray, temperature: float) -> np.ndarray:
+    temp = max(1e-6, float(temperature))
+    logits = np.asarray(scores, dtype=np.float64) / temp
+    logits -= np.max(logits)
+    weights = np.exp(logits)
+    total = np.sum(weights)
+    if not np.isfinite(total) or total <= 0:
+        return np.ones_like(logits) / len(logits)
+    return weights / total
+
+
+def _average_actor_states(states, weights) -> dict:
+    weights = np.asarray(weights, dtype=np.float64)
+    weights = weights / max(float(weights.sum()), 1e-12)
+    return {
+        key: sum(float(w) * state[key] for w, state in zip(weights, states))
+        for key in states[0]
+    }
+
+
+def _sync_actor_baseline(policies, perf_index: np.ndarray, mode: str,
+                         temperature: float) -> float:
+    if mode == 'paper_sac':
+        return 0.0
+
+    states = [_actor_state(policy) for policy in policies]
+    best_worker = int(np.argmax(perf_index))
+    best_state = states[best_worker]
+
+    if mode == 'paper_fsac':
+        entropies = []
+        best_pi = float(perf_index[best_worker])
+        for wid, policy in enumerate(policies):
+            if wid == best_worker:
+                continue
+            entropies.append(_blend_with_best(
+                policy, best_state, float(perf_index[wid]), best_pi, temperature))
+        return float(np.mean(entropies)) if entropies else 0.0
+
+    if mode == 'fedbest_fsac':
+        for policy in policies:
+            _load_actor_state(policy, best_state)
+        return 0.0
+
+    if mode == 'fedavg_fsac':
+        weights = np.ones(len(policies), dtype=np.float64) / len(policies)
+    elif mode == 'fedsoftmax_fsac_noea':
+        weights = _softmax_weights(perf_index, temperature)
+    else:
+        raise ValueError(f'unknown baseline mode: {mode}')
+
+    global_state = _average_actor_states(states, weights)
+    for policy in policies:
+        _load_actor_state(policy, global_state)
     return float(-(weights * np.log(weights + 1e-12)).sum())
 
 
@@ -196,7 +256,7 @@ def main():
     buffers = [ReplayBuffer(args.buffer_size) for _ in policies]
     perf_index = np.zeros(args.num_workers, dtype=np.float64)
 
-    mode = 'paper_fsac' if args.federated else 'paper_sac'
+    mode = args.baseline_mode or ('paper_fsac' if args.federated else 'paper_sac')
     exp = args.exp_name or f"{mode}_{args.env}_s{args.seed}"
     run_dir = Path(args.log_dir) / exp
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -206,9 +266,10 @@ def main():
         'mode': mode,
         'env': args.env,
         'algorithm': 'Discrete-SAC',
-        'federated_rule': 'best_worker_actor_boltzmann_blend' if args.federated else 'none',
+        'federated_rule': mode,
         'shared_parameters': 'actor',
         'local_parameters': 'critic,target_critic,entropy_temperature',
+        'ea_enabled': False,
         'source': 'Federated Reinforcement Learning for Sharing Experiences Between Multiple Workers',
     })
     (run_dir / 'metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
@@ -252,17 +313,10 @@ def main():
                     policy.sync_target(args.tau)
                     total_updates += 1
 
-        if args.federated:
-            best_worker = int(np.argmax(perf_index))
-            best_state = _actor_state(policies[best_worker])
-            best_pi = float(perf_index[best_worker])
-            for wid, policy in enumerate(policies):
-                if wid == best_worker:
-                    continue
-                sync_entropy.append(_blend_with_best(
-                    policy, best_state, float(perf_index[wid]), best_pi,
-                    args.federated_temperature,
-                ))
+        sync_entropy_value = _sync_actor_baseline(
+            policies, perf_index, mode, args.federated_temperature)
+        if mode != 'paper_sac':
+            sync_entropy.append(sync_entropy_value)
 
         if round_idx % args.eval_interval == 0 or round_idx == args.rounds - 1:
             eval_mean, eval_std = _evaluate(
@@ -281,11 +335,11 @@ def main():
                 'buffer_size': int(sum(len(b) for b in buffers)),
                 'gen_time': time.time() - round_start,
                 'total_time': time.time() - start,
-                'sync_applied': int(args.federated),
+                'sync_applied': int(mode != 'paper_sac'),
                 'fitness_std': float(np.std(worker_rewards)),
                 'selected_clients': args.num_workers,
                 'aggregation_entropy': float(np.mean(sync_entropy)) if sync_entropy else 0.0,
-                'fed_round_applied': int(args.federated),
+                'fed_round_applied': int(mode != 'paper_sac'),
                 'archive_best': best_eval,
                 'archive_size': 0,
                 'aggregation_temperature': args.federated_temperature,
