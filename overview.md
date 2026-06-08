@@ -196,7 +196,14 @@ FedEvoFSAC-no_heterogeneity
 SB3-PPO
 ```
 
-说明：SB3 的 SAC 是连续动作 SAC，不能直接用于 `CartPole-v1`、`Acrobot-v1`、`LunarLander-v3`。因此这里不用 SB3-SAC 作为这三个环境的 baseline。
+论文复现 baseline：
+
+```text
+Paper-SAC
+Paper-FSAC
+```
+
+说明：SB3 的 SAC 是连续动作 SAC，不能直接用于 `CartPole-v1`、`Acrobot-v1`、`LunarLander-v3`。因此这里不用 SB3-SAC 作为这三个环境的 baseline。论文里的 FSAC 可以复现为本项目的 `Paper-FSAC`：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。`Paper-SAC` 是去掉联邦共享后的独立多 worker SAC，用来判断联邦共享本身是否带来收益。
 
 ## 10. 实验脚本
 

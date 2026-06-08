@@ -14,6 +14,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument('--fed-log-dir', default='logs_fedrl_hetero')
     p.add_argument('--sb3-log-dir', default='logs_sb3')
+    p.add_argument('--paper-log-dir', default=None)
     p.add_argument('--out-dir', default='plots/fedrl_heterogeneous')
     p.add_argument('--envs', nargs='*', default=None)
     return p.parse_args()
@@ -60,6 +61,10 @@ def load_runs(log_dirs):
                 label = f"FedEvoFSAC-{fed_abl}"
             elif mode.startswith('sb3_'):
                 label = mode.upper().replace('SB3_', 'SB3-')
+            elif mode == 'paper_fsac':
+                label = 'Paper-FSAC'
+            elif mode == 'paper_sac':
+                label = 'Paper-SAC'
             runs.append({
                 'env': meta.get('env', 'unknown'),
                 'label': label,
@@ -74,7 +79,10 @@ def main():
     args = parse_args()
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    runs = load_runs([args.fed_log_dir, args.sb3_log_dir])
+    log_dirs = [args.fed_log_dir, args.sb3_log_dir]
+    if args.paper_log_dir:
+        log_dirs.append(args.paper_log_dir)
+    runs = load_runs(log_dirs)
     envs = args.envs or sorted({r['env'] for r in runs})
     colors = {
         'FedEvoFSAC-full': '#D55E00',
@@ -83,6 +91,8 @@ def main():
         'FedEvoFSAC-no_ea_injection': '#E69F00',
         'FedEvoFSAC-no_heterogeneity': '#CC79A7',
         'SB3-PPO': '#444444',
+        'Paper-FSAC': '#56B4E9',
+        'Paper-SAC': '#999999',
     }
     for env in envs:
         env_runs = [r for r in runs if r['env'] == env]

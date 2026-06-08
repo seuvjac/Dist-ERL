@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""Reproduce a paper-style federated discrete SAC baseline.
+
+This baseline keeps local SAC critics on each worker and periodically blends
+each worker actor with the current best worker actor using reward-derived
+Boltzmann weights. It is intended as a clean comparison target for FedEvoFSAC.
+"""
+
+import argparse
+import csv
+import json
+import random
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+from torch import optim
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from src.utils.environment import get_env_info, make_env
+from src.utils.policies import FSACPolicy
+
+METRIC_FIELDS = [
+    'generation', 'total_env_steps', 'eval_reward_mean', 'eval_reward_std',
+    'eval_ea_mean', 'eval_ea_std',
+    'best_fitness', 'mean_fitness', 'rl_steps', 'buffer_size',
+    'gen_time', 'total_time', 'sync_applied', 'reproduced_trajectories', 'migrated',
+    'weight_diversity', 'fitness_std', 'comm_upload_bytes', 'comm_full_traj_bytes',
+    'stagnation_boost', 'rl_reset', 'migration_allowed', 'migration_gate',
+    'eval_rl_aligned', 'ea_median_fitness', 'policy_exploration_noise',
+    'federated_warm_start', 'migration_copies',
+    'client_reward_mean', 'client_reward_std', 'client_fitness_mean',
+    'client_fitness_std', 'selected_clients', 'aggregation_entropy',
+    'fed_round_applied', 'archive_best', 'archive_size',
+    'aggregation_temperature',
+]
+
+
+class ReplayBuffer:
+    def __init__(self, capacity: int):
+        self.capacity = int(capacity)
+        self.data = []
+        self.pos = 0
+
+    def add(self, obs, action, reward, next_obs, done) -> None:
+        item = (
+            np.asarray(obs, dtype=np.float32),
+            int(action),
+            float(reward),
+            np.asarray(next_obs, dtype=np.float32),
+            float(done),
+        )
+        if len(self.data) < self.capacity:
+            self.data.append(item)
+        else:
+            self.data[self.pos] = item
+            self.pos = (self.pos + 1) % self.capacity
+
+    def sample(self, batch_size: int) -> dict:
+        idx = np.random.randint(0, len(self.data), size=int(batch_size))
+        batch = [self.data[i] for i in idx]
+        obs, actions, rewards, next_obs, dones = zip(*batch)
+        return {
+            'observations': np.asarray(obs, dtype=np.float32),
+            'actions': np.asarray(actions, dtype=np.int64),
+            'rewards': np.asarray(rewards, dtype=np.float32),
+            'next_observations': np.asarray(next_obs, dtype=np.float32),
+            'dones': np.asarray(dones, dtype=np.float32),
+        }
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument('--env', default='CartPole-v1')
+    p.add_argument('--seed', type=int, default=0)
+    p.add_argument('--rounds', type=int, default=120)
+    p.add_argument('--num-workers', type=int, default=5)
+    p.add_argument('--max-episode-steps', type=int, default=500)
+    p.add_argument('--updates', type=int, default=8)
+    p.add_argument('--batch-size', type=int, default=128)
+    p.add_argument('--buffer-size', type=int, default=50000)
+    p.add_argument('--lr', type=float, default=3e-4)
+    p.add_argument('--gamma', type=float, default=0.99)
+    p.add_argument('--tau', type=float, default=0.005)
+    p.add_argument('--pi-smoothing', type=float, default=0.9,
+                   help='EMA factor for paper-style worker performance index')
+    p.add_argument('--federated-temperature', type=float, default=50.0)
+    p.add_argument('--client-heterogeneity', type=float, default=0.25)
+    p.add_argument('--client-heterogeneity-mode', default='env_params_only',
+                   choices=['none', 'reward_action_noise', 'env_params',
+                            'env_params_only', 'mixed'])
+    p.add_argument('--eval-interval', type=int, default=5)
+    p.add_argument('--eval-episodes', type=int, default=5)
+    p.add_argument('--log-dir', default='logs_fsac_paper')
+    p.add_argument('--exp-name', default=None)
+    p.add_argument('--federated', action='store_true',
+                   help='Enable best-worker actor sharing')
+    p.add_argument('--no-federation', dest='federated', action='store_false')
+    p.set_defaults(federated=True)
+    return p.parse_args()
+
+
+def _actor_state(policy: FSACPolicy) -> dict:
+    return {k: v.detach().cpu().clone() for k, v in policy.actor.state_dict().items()}
+
+
+def _load_actor_state(policy: FSACPolicy, state: dict) -> None:
+    policy.actor.load_state_dict({k: v.clone() for k, v in state.items()})
+
+
+def _blend_with_best(policy: FSACPolicy, best_state: dict, worker_pi: float,
+                     best_pi: float, temperature: float) -> float:
+    local_state = _actor_state(policy)
+    temp = max(1e-6, float(temperature))
+    logits = np.asarray([worker_pi, best_pi], dtype=np.float64) / temp
+    logits -= np.max(logits)
+    weights = np.exp(logits)
+    weights /= np.sum(weights)
+    mixed = {
+        k: weights[0] * local_state[k] + weights[1] * best_state[k]
+        for k in local_state
+    }
+    _load_actor_state(policy, mixed)
+    return float(-(weights * np.log(weights + 1e-12)).sum())
+
+
+def _rollout(policy, env_name, max_steps, seed, client_id=None,
+             heterogeneity=0.0, heterogeneity_mode='none', train=True):
+    env = make_env(
+        env_name,
+        max_episode_steps=max_steps,
+        client_id=client_id,
+        heterogeneity=heterogeneity,
+        heterogeneity_mode=heterogeneity_mode,
+    )
+    obs, _ = env.reset(seed=seed)
+    total = 0.0
+    transitions = []
+    done = False
+    truncated = False
+    steps = 0
+    while not (done or truncated) and steps < max_steps:
+        action = policy.get_action(obs, deterministic=not train)
+        next_obs, reward, done, truncated, _ = env.step(action)
+        terminal = bool(done or truncated)
+        transitions.append((obs, action, reward, next_obs, terminal))
+        total += float(reward)
+        obs = next_obs
+        steps += 1
+    env.close()
+    return total, transitions, steps
+
+
+def _evaluate(policies, env_name, max_steps, seed, episodes):
+    rewards = []
+    for wid, policy in enumerate(policies):
+        for ep in range(episodes):
+            reward, _, _ = _rollout(
+                policy, env_name, max_steps,
+                seed + 100000 + wid * 1000 + ep,
+                train=False,
+            )
+            rewards.append(reward)
+    return float(np.mean(rewards)), float(np.std(rewards))
+
+
+def _write_row(path: Path, row: dict) -> None:
+    full = {k: '' for k in METRIC_FIELDS}
+    full.update(row)
+    with path.open('a', newline='', encoding='utf-8') as f:
+        csv.DictWriter(f, fieldnames=METRIC_FIELDS).writerow(full)
+
+
+def main():
+    args = parse_args()
+    if args.env not in ('CartPole-v1', 'Acrobot-v1', 'LunarLander-v3'):
+        raise SystemExit('paper FSAC baseline is configured for the three discrete envs only')
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+
+    info = get_env_info(args.env)
+    policies = [
+        FSACPolicy(info['state_dim'], info['action_dim'])
+        for _ in range(args.num_workers)
+    ]
+    optimizers = [optim.Adam(p.parameters(), lr=args.lr) for p in policies]
+    buffers = [ReplayBuffer(args.buffer_size) for _ in policies]
+    perf_index = np.zeros(args.num_workers, dtype=np.float64)
+
+    mode = 'paper_fsac' if args.federated else 'paper_sac'
+    exp = args.exp_name or f"{mode}_{args.env}_s{args.seed}"
+    run_dir = Path(args.log_dir) / exp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = run_dir / 'metrics.csv'
+    metadata = vars(args).copy()
+    metadata.update({
+        'mode': mode,
+        'env': args.env,
+        'algorithm': 'Discrete-SAC',
+        'federated_rule': 'best_worker_actor_boltzmann_blend' if args.federated else 'none',
+        'shared_parameters': 'actor',
+        'local_parameters': 'critic,target_critic,entropy_temperature',
+        'source': 'Federated Reinforcement Learning for Sharing Experiences Between Multiple Workers',
+    })
+    (run_dir / 'metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
+    with metrics_path.open('w', newline='', encoding='utf-8') as f:
+        csv.DictWriter(f, fieldnames=METRIC_FIELDS).writeheader()
+
+    start = time.time()
+    total_steps = 0
+    total_updates = 0
+    best_eval = -np.inf
+
+    for round_idx in range(args.rounds):
+        round_start = time.time()
+        worker_rewards = []
+        sync_entropy = []
+        for wid, policy in enumerate(policies):
+            reward, transitions, steps = _rollout(
+                policy,
+                args.env,
+                args.max_episode_steps,
+                args.seed + round_idx * 10000 + wid,
+                client_id=wid,
+                heterogeneity=args.client_heterogeneity,
+                heterogeneity_mode=args.client_heterogeneity_mode,
+                train=True,
+            )
+            worker_rewards.append(reward)
+            total_steps += steps
+            for item in transitions:
+                buffers[wid].add(*item)
+            perf_index[wid] = args.pi_smoothing * perf_index[wid] + reward
+
+            if len(buffers[wid]) >= args.batch_size:
+                for _ in range(args.updates):
+                    batch = buffers[wid].sample(args.batch_size)
+                    loss = policy.update(batch, args.gamma, args.tau)
+                    optimizers[wid].zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(policy.parameters(), 10.0)
+                    optimizers[wid].step()
+                    policy.sync_target(args.tau)
+                    total_updates += 1
+
+        if args.federated:
+            best_worker = int(np.argmax(perf_index))
+            best_state = _actor_state(policies[best_worker])
+            best_pi = float(perf_index[best_worker])
+            for wid, policy in enumerate(policies):
+                if wid == best_worker:
+                    continue
+                sync_entropy.append(_blend_with_best(
+                    policy, best_state, float(perf_index[wid]), best_pi,
+                    args.federated_temperature,
+                ))
+
+        if round_idx % args.eval_interval == 0 or round_idx == args.rounds - 1:
+            eval_mean, eval_std = _evaluate(
+                policies, args.env, args.max_episode_steps, args.seed,
+                args.eval_episodes,
+            )
+            best_eval = max(best_eval, eval_mean)
+            row = {
+                'generation': round_idx,
+                'total_env_steps': total_steps,
+                'eval_reward_mean': eval_mean,
+                'eval_reward_std': eval_std,
+                'best_fitness': best_eval,
+                'mean_fitness': float(np.mean(worker_rewards)),
+                'rl_steps': total_updates,
+                'buffer_size': int(sum(len(b) for b in buffers)),
+                'gen_time': time.time() - round_start,
+                'total_time': time.time() - start,
+                'sync_applied': int(args.federated),
+                'fitness_std': float(np.std(worker_rewards)),
+                'selected_clients': args.num_workers,
+                'aggregation_entropy': float(np.mean(sync_entropy)) if sync_entropy else 0.0,
+                'fed_round_applied': int(args.federated),
+                'archive_best': best_eval,
+                'archive_size': 0,
+                'aggregation_temperature': args.federated_temperature,
+                'client_reward_mean': float(np.mean(worker_rewards)),
+                'client_reward_std': float(np.std(worker_rewards)),
+                'client_fitness_mean': float(np.mean(perf_index)),
+                'client_fitness_std': float(np.std(perf_index)),
+            }
+            _write_row(metrics_path, row)
+            print(
+                f"{exp}: round={round_idx} steps={total_steps} "
+                f"eval={eval_mean:.2f}+/-{eval_std:.2f} "
+                f"worker={np.mean(worker_rewards):.2f}",
+                flush=True,
+            )
+
+    for idx, policy in enumerate(policies):
+        torch.save(policy.state_dict(), run_dir / f'worker_{idx}.pt')
+    print(metrics_path)
+
+
+if __name__ == '__main__':
+    main()
