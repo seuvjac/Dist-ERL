@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FedEvoRL runs for every environment used by the SB3 comparison suite.
+# FedEvoFSAC runs for the three SAC/FSAC comparison environments.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -9,8 +9,8 @@ ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0"}
 FED_VARIANTS=${FED_VARIANTS:-"full uniform_aggregation no_local_rl no_ea_injection no_heterogeneity"}
 LOG_DIR=${LOG_DIR:-"logs_fedrl_hetero"}
-SB3_LOG_DIR=${SB3_LOG_DIR:-"logs_sb3"}
-OUT_DIR=${OUT_DIR:-"plots/fedrl_vs_sb3"}
+PAPER_LOG_DIR=${PAPER_LOG_DIR:-"logs_fsac_paper"}
+OUT_DIR=${OUT_DIR:-"plots/fedrl_heterogeneous"}
 
 for ENV_NAME in $ENVS; do
   read POP CLIENTS GENS STEPS <<<"$(python3 - <<PY
@@ -63,5 +63,5 @@ done
 
 python3 scripts/plot_fedrl_heterogeneous.py \
   --fed-log-dir "$LOG_DIR" \
-  --sb3-log-dir "$SB3_LOG_DIR" \
+  --paper-log-dir "$PAPER_LOG_DIR" \
   --out-dir "$OUT_DIR"

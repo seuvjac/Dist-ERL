@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot FedEvoRL heterogeneous variants with optional SB3 baselines."""
+"""Plot FedEvoFSAC variants with Paper-SAC/FSAC baselines."""
 
 import argparse
 import csv
@@ -13,8 +13,7 @@ import numpy as np
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument('--fed-log-dir', default='logs_fedrl_hetero')
-    p.add_argument('--sb3-log-dir', default='logs_sb3')
-    p.add_argument('--paper-log-dir', default=None)
+    p.add_argument('--paper-log-dir', default='logs_fsac_paper')
     p.add_argument('--out-dir', default='plots/fedrl_heterogeneous')
     p.add_argument('--envs', nargs='*', default=None)
     return p.parse_args()
@@ -55,12 +54,12 @@ def load_runs(log_dirs):
             if len(xs) < 1:
                 continue
             mode = meta.get('mode', metrics.parent.name)
+            if str(mode).startswith('sb3_'):
+                continue
             fed_abl = meta.get('fed_ablation', 'n/a')
             label = mode
             if mode == 'fed_evo_rl':
                 label = f"FedEvoFSAC-{fed_abl}"
-            elif mode.startswith('sb3_'):
-                label = mode.upper().replace('SB3_', 'SB3-')
             elif mode == 'paper_fsac':
                 label = 'Paper-FSAC'
             elif mode == 'paper_sac':
@@ -79,7 +78,7 @@ def main():
     args = parse_args()
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    log_dirs = [args.fed_log_dir, args.sb3_log_dir]
+    log_dirs = [args.fed_log_dir]
     if args.paper_log_dir:
         log_dirs.append(args.paper_log_dir)
     runs = load_runs(log_dirs)
@@ -90,7 +89,6 @@ def main():
         'FedEvoFSAC-no_local_rl': '#009E73',
         'FedEvoFSAC-no_ea_injection': '#E69F00',
         'FedEvoFSAC-no_heterogeneity': '#CC79A7',
-        'SB3-PPO': '#444444',
         'Paper-FSAC': '#56B4E9',
         'Paper-SAC': '#999999',
     }
@@ -110,7 +108,7 @@ def main():
             ax.plot(xs, y, label=f"{label} (n={len(group)})", color=colors.get(label), linewidth=2)
             if len(group) > 1:
                 ax.fill_between(xs, y - s, y + s, color=colors.get(label), alpha=0.14)
-        ax.set_title(f'{env}: FedRL variants vs SB3 baselines')
+        ax.set_title(f'{env}: FedEvoFSAC vs SAC/FSAC baselines')
         ax.set_xlabel('Environment steps')
         ax.set_ylabel('Best evaluation score')
         ax.grid(alpha=0.3)

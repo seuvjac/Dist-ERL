@@ -33,6 +33,5 @@ done
 
 python scripts/plot_fedrl_heterogeneous.py \
   --fed-log-dir logs_fedrl_hetero \
-  --sb3-log-dir logs_sb3 \
   --paper-log-dir "$LOG_DIR" \
   --out-dir plots/fedrl_heterogeneous

@@ -87,7 +87,7 @@ python -m src.main --mode fed_evo_rl --algorithm FSAC --env CartPole-v1
 
 ## 5. FSAC：Federated Discrete SAC
 
-这里的 FSAC 是 **Federated Soft Actor-Critic**，但不是 SB3 的连续动作 SAC。因为三个环境都是离散动作，所以本项目实现的是 discrete SAC：
+这里的 FSAC 是 **Federated Soft Actor-Critic**。因为三个环境都是离散动作，所以本项目实现的是 discrete SAC：
 
 ```text
 actor(s) -> logits over discrete actions
@@ -190,20 +190,14 @@ FedEvoFSAC-no_ea_injection
 FedEvoFSAC-no_heterogeneity
 ```
 
-外部强 RL baseline：
-
-```text
-SB3-PPO
-```
-
-论文复现 baseline：
+当前对照组只保留 SAC / FSAC：
 
 ```text
 Paper-SAC
 Paper-FSAC
 ```
 
-说明：SB3 的 SAC 是连续动作 SAC，不能直接用于 `CartPole-v1`、`Acrobot-v1`、`LunarLander-v3`。因此这里不用 SB3-SAC 作为这三个环境的 baseline。论文里的 FSAC 可以复现为本项目的 `Paper-FSAC`：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。`Paper-SAC` 是去掉联邦共享后的独立多 worker SAC，用来判断联邦共享本身是否带来收益。
+说明：当前实验不再把 SB3 放入主对照组。主算法维持使用 `FedEvoFSAC`；对照只保留同一算法族内的 `Paper-SAC` 和 `Paper-FSAC`，这样能更直接地检验“联邦共享”和“EA actor 进化”分别带来的影响。论文里的 FSAC 复现为本项目的 `Paper-FSAC`：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。`Paper-SAC` 是去掉联邦共享后的独立多 worker SAC。
 
 ## 10. 实验脚本
 
@@ -229,13 +223,13 @@ FED_VARIANTS="full uniform_aggregation no_local_rl no_ea_injection no_heterogene
 只补跑 FedEvoFSAC：
 
 ```bash
-./run_fedevorl_for_sb3_envs.sh
+./run_fedevofsac_for_baselines.sh
 ```
 
-只跑 SB3-PPO baseline：
+只跑 SAC / FSAC baseline：
 
 ```bash
-./run_sb3_heterogeneous_suite.sh
+./run_fsac_paper_baseline.sh
 ```
 
 快速 smoke：
@@ -283,7 +277,7 @@ python -m src.main \
 - delta clipping 与 bounded EA mutation；
 - global elite archive；
 - FedEvoFSAC 消融脚本；
-- SB3-PPO baseline 和对比绘图。
+- Paper-SAC / Paper-FSAC baseline 和对比绘图。
 
 主要风险：
 
