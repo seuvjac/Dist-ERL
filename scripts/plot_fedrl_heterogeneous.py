@@ -24,6 +24,8 @@ def parse_args():
                    help='Use raw env steps, per-run progress percentage, or logged generation/round as x-axis')
     p.add_argument('--max-x', type=float, default=None,
                    help='Optional x-axis cap after x-axis conversion')
+    p.add_argument('--target-x', type=float, default=None,
+                   help='Force every method in each plot to extend to this x value, holding the final return')
     p.add_argument('--metric', default='current', choices=['current', 'best'],
                    help='current uses eval_reward_mean; best uses best/archive-style optimistic score')
     return p.parse_args()
@@ -165,10 +167,15 @@ def main():
             continue
         fig, ax = plt.subplots(figsize=(10, 6))
         labels = sorted({r['label'] for r in env_runs})
+        if args.target_x is not None:
+            plot_max_x = float(args.target_x)
+        elif args.max_x is not None:
+            plot_max_x = float(args.max_x)
+        else:
+            plot_max_x = max(float(r['x'][-1]) for r in env_runs)
         for label in labels:
             group = [r for r in env_runs if r['label'] == label]
-            max_x = max(float(r['x'][-1]) for r in group)
-            xs = np.linspace(0, max_x, 100)
+            xs = np.linspace(0, plot_max_x, 100)
             mat = np.vstack([np.interp(xs, r['x'], r['y']) for r in group])
             y = mat.mean(axis=0)
             s = mat.std(axis=0)

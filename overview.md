@@ -329,10 +329,10 @@ python -m src.main \
 | `comm_upload_bytes` | 实际上传 actor 参数量估计 |
 | `comm_full_traj_bytes` | 假设上传完整 trajectory 的通信量估计 |
 
-主曲线默认使用 `eval_reward_mean`，即当前策略评估回报；`best_fitness` / `archive_best` 只作为辅助表格或附图指标，避免把历史最优和当前性能混在同一主图里。横向比较需要同时报告三种视角：
+主曲线默认使用 `eval_reward_mean`，即当前策略评估回报；`best_fitness` / `archive_best` 只作为辅助表格或附图指标，避免把历史最优和当前性能混在同一主图里。FedRL 主文建议优先使用 communication rounds 作为横坐标，因为它直接对应联邦通信效率；raw environment steps 和 normalized progress 作为补充视角：
 
-- reward vs raw environment steps：样本效率，但需说明 FedEvoFSAC 的 steps 包含 population evaluation。
-- reward vs communication round / generation：联邦通信效率。
+- reward vs communication round / generation：主图，说明联邦通信效率。
+- reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
 - reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
 
 最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。CartPole 只作为 sanity check；核心证据优先放在 Acrobot 和 LunarLander。LunarLander 结论应写成强异质下相对改善，而不是声称完全解决异质性退化。

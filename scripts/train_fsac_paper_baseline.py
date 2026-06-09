@@ -80,6 +80,8 @@ def parse_args():
     p.add_argument('--env', default='CartPole-v1')
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--rounds', type=int, default=120)
+    p.add_argument('--target-env-steps', type=int, default=0,
+                   help='Continue training until at least this many environment steps are collected')
     p.add_argument('--num-workers', type=int, default=5)
     p.add_argument('--max-episode-steps', type=int, default=500)
     p.add_argument('--updates', type=int, default=8)
@@ -349,7 +351,10 @@ def main():
     total_updates = 0
     best_eval = -np.inf
 
-    for round_idx in range(args.rounds):
+    round_idx = 0
+    while round_idx < args.rounds or (
+        args.target_env_steps > 0 and total_steps < args.target_env_steps
+    ):
         round_start = time.time()
         worker_rewards = []
         sync_entropy = []
@@ -423,6 +428,7 @@ def main():
                 f"worker={np.mean(worker_rewards):.2f}",
                 flush=True,
             )
+        round_idx += 1
 
     for idx, policy in enumerate(policies):
         torch.save(policy.state_dict(), run_dir / f'worker_{idx}.pt')

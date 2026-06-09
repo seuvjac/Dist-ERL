@@ -110,6 +110,8 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=256, help='Batch size')
     parser.add_argument('--lr', type=float, default=3e-4, help='Learning rate')
     parser.add_argument('--max-generations', type=int, default=100, help='Maximum generations')
+    parser.add_argument('--target-env-steps', type=int, default=0,
+                        help='Continue training until at least this many environment interactions are counted')
     parser.add_argument('--sync-interval', type=int, default=20, help='RL-EA Re2 sync interval for erl_re2')
     parser.add_argument('--eval-interval', type=int, default=1, help='Evaluation interval in generations')
     parser.add_argument('--eval-episodes', type=int, default=10, help='Number of episodes for evaluation')
@@ -329,7 +331,10 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
     last_client_reward_mean = 0.0
     last_client_reward_std = 0.0
 
-    for generation in range(args.max_generations):
+    generation = 0
+    while generation < args.max_generations or (
+        args.target_env_steps > 0 and total_env_steps < args.target_env_steps
+    ):
         gen_start = time.time()
         population = ray.get(manager.get_population_for_evaluation.remote())
 
@@ -458,6 +463,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         if args.wandb:
             import wandb
             wandb.log(log_data)
+        generation += 1
 
     if eval_reward_history:
         _generate_training_plot(

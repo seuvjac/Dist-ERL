@@ -17,7 +17,7 @@ DQN_LOG_DIR=${DQN_LOG_DIR:-"logs_dqn_fedrl_mixed"}
 COMPARISON_OUT_DIR=${COMPARISON_OUT_DIR:-"plots/fedrl_comparison_mixed"}
 ABLATION_OUT_DIR=${ABLATION_OUT_DIR:-"plots/fedrl_ablations_mixed"}
 SUMMARY_OUT_DIR=${SUMMARY_OUT_DIR:-"plots/fedrl_tables_mixed"}
-PLOT_X_AXIS=${PLOT_X_AXIS:-"progress"}
+PLOT_X_AXIS=${PLOT_X_AXIS:-"round"}
 PLOT_METRIC=${PLOT_METRIC:-"current"}
 CLIENT_HETEROGENEITY=${CLIENT_HETEROGENEITY:-"0.60"}
 CLIENT_HETEROGENEITY_MODE=${CLIENT_HETEROGENEITY_MODE:-"mixed"}
@@ -38,6 +38,30 @@ PY
   CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-1}
   CLIENT_UPDATES=${FED_CLIENT_UPDATES:-2}
   ALG=${FED_ALGORITHM:-"FSAC"}
+  TARGET_STEPS=${TARGET_ENV_STEPS:-$(python3 - <<PY
+import math
+pop = int('$POP')
+clients = int('$CLIENTS')
+gens = int('$GENS')
+steps = int('$STEPS')
+eval_episodes = int('$EVAL_EPISODES')
+rollouts = int('$CLIENT_ROLLOUTS')
+interval = 5
+eval_half = max(1, eval_episodes // 2)
+fed_rounds = sum(1 for g in range(gens) if g % interval == 0)
+target = gens * pop * clients * steps * eval_half + fed_rounds * clients * rollouts * steps
+print(target)
+PY
+)}
+  BASELINE_ROUNDS=${BASELINE_ROUNDS:-$(python3 - <<PY
+import math
+target = int('$TARGET_STEPS')
+clients = int('$CLIENTS')
+steps = int('$STEPS')
+print(max(1, math.ceil(target / max(1, clients * steps))))
+PY
+)}
+  echo "$ENV_NAME equal-step budget: target_env_steps=$TARGET_STEPS baseline_rounds>=$BASELINE_ROUNDS"
 
   for SEED in $SEEDS; do
     for VARIANT in $FED_VARIANTS; do
@@ -50,6 +74,7 @@ PY
         --population-size "$POP" \
         --num-clients "$CLIENTS" \
         --max-generations "$GENS" \
+        --target-env-steps "$TARGET_STEPS" \
         --max-episode-steps "$STEPS" \
         --client-heterogeneity "$CLIENT_HETEROGENEITY" \
         --client-heterogeneity-mode "$CLIENT_HETEROGENEITY_MODE" \
@@ -81,6 +106,7 @@ PY
         --population-size "$POP" \
         --num-workers "$CLIENTS" \
         --max-generations "$GENS" \
+        --target-env-steps "$TARGET_STEPS" \
         --max-episode-steps "$STEPS" \
         --rl-rollouts "$CLIENT_ROLLOUTS" \
         --rl-updates "$CLIENT_UPDATES" \
@@ -95,7 +121,8 @@ PY
       python3 scripts/train_fsac_paper_baseline.py \
         --env "$ENV_NAME" \
         --seed "$SEED" \
-        --rounds "$GENS" \
+        --rounds "$BASELINE_ROUNDS" \
+        --target-env-steps "$TARGET_STEPS" \
         --num-workers "$CLIENTS" \
         --updates "$CLIENT_UPDATES" \
         --batch-size 32 \
@@ -116,7 +143,8 @@ PY
       python3 scripts/train_fedavg_dqn_baseline.py \
         --env "$ENV_NAME" \
         --seed "$SEED" \
-        --rounds "$GENS" \
+        --rounds "$BASELINE_ROUNDS" \
+        --target-env-steps "$TARGET_STEPS" \
         --num-workers "$CLIENTS" \
         --updates "$CLIENT_UPDATES" \
         --batch-size 32 \
