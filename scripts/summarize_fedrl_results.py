@@ -44,11 +44,11 @@ def _label(meta, run_name):
     if mode in ('fedbest_sac', 'fedbest_fsac'):
         return 'FedBest-SAC'
     if mode in ('fedmedian_sac', 'fedmedian_fsac'):
-        return 'FedMedian-SAC'
+        return 'RobustFed-SAC-Median'
     if mode in ('fedtrimmedmean_sac', 'fedtrimmedmean_fsac'):
-        return 'FedTrimmedMean-SAC'
+        return 'RobustFed-SAC-TrimmedMean'
     if mode in ('attention_sac_lite', 'attention_fsac_lite'):
-        return 'Attention-SAC-lite'
+        return 'ContextFed-SAC-lite'
     if mode == 'fedavg_dqn':
         return 'FedAvg-DQN'
     if mode == 'standard_erl' and meta.get('algorithm') == 'FSAC':
@@ -89,6 +89,7 @@ def _run_values(metrics_path):
             rows.append({
                 'generation': _num(row.get('generation')),
                 'steps': _num(row.get('total_env_steps')),
+                'wall_time_sec': _num(row.get('total_time')),
                 'current': current,
                 'best': max(best_vals) if best_vals else current,
             })
@@ -128,7 +129,7 @@ def main():
         'env', 'method', 'n',
         'final_current_mean', 'final_current_std', 'final_current',
         'final_best_mean', 'final_best_std', 'final_best',
-        'max_steps', 'max_round',
+        'max_steps', 'max_round', 'max_wall_time_sec', 'wall_time_sec',
     ]
     with out_path.open('w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -138,6 +139,7 @@ def main():
             bests = np.asarray([v['best'] for v in vals], dtype=float)
             steps = np.asarray([v['steps'] for v in vals], dtype=float)
             rounds = np.asarray([v['generation'] for v in vals], dtype=float)
+            wall_times = np.asarray([v['wall_time_sec'] for v in vals], dtype=float)
             row = {
                 'env': env,
                 'method': method,
@@ -150,6 +152,8 @@ def main():
                 'final_best': _fmt(bests.mean(), bests.std()),
                 'max_steps': int(np.nanmax(steps)),
                 'max_round': int(np.nanmax(rounds)),
+                'max_wall_time_sec': float(np.nanmax(wall_times)),
+                'wall_time_sec': _fmt(float(np.nanmean(wall_times)), float(np.nanstd(wall_times))),
             }
             writer.writerow(row)
     print(out_path)

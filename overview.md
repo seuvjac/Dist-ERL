@@ -198,15 +198,15 @@ Paper-FSAC
 FedAvg-SAC
 FedSoftmax-SAC-noEA
 FedBest-SAC
-FedMedian-SAC
-FedTrimmedMean-SAC
-Attention-SAC-lite
+RobustFed-SAC-Median
+RobustFed-SAC-TrimmedMean
+ContextFed-SAC-lite
 FedAvg-DQN
 ```
 
 说明：当前实验不再把 SB3 和 `EvoSAC-noFed` 放入主横向对照组。主算法维持使用 `FedEvoFSAC`；横向对照只保留同协议 SAC / FSAC / DQN 系联邦方法。FedEvoFSAC 的模块消融单独出图，不和其他算法混在同一张横向对比图里。
 
-这里的 `FedAvg-SAC`、`FedMedian-SAC`、`FedTrimmedMean-SAC`、`Attention-SAC-lite` 是**同协议内部基线**：它们统一使用本项目的三环境、异质 client 设置、日志格式和评估协议，用来拆解聚合规则本身的影响。它们不是外部论文的严格原代码复现，不能在论文图注里写成 external baseline。若需要和论文方法比较，必须使用外部仓库的原代码单独跑 external-original comparison。
+这里的 `FedAvg-SAC`、`RobustFed-SAC-Median`、`RobustFed-SAC-TrimmedMean`、`ContextFed-SAC-lite` 是**同协议内部基线**：它们统一使用本项目的三环境、异质 client 设置、日志格式和评估协议，用来拆解聚合规则本身的影响。它们不是外部论文的严格原代码复现，不能在论文图注里写成 external baseline。若需要和论文方法比较，必须使用外部仓库的原代码单独跑 external-original comparison。
 
 各对照组含义：
 
@@ -217,9 +217,9 @@ FedAvg-DQN
 | `FedAvg-SAC` | client actor 做均匀平均，critic 保持本地 | 普通 FedAvg actor 聚合是否足够 |
 | `FedSoftmax-SAC-noEA` | client actor 按 performance index softmax 加权聚合，无 EA | reward-aware federation 在没有 EA 时的贡献 |
 | `FedBest-SAC` | 每轮将最优 worker actor 广播给所有 worker | 贪心 best-worker 共享是否稳定 |
-| `FedMedian-SAC` | client actor 做逐参数 median 聚合，critic 保持本地 | 参考 fault-tolerant / Byzantine FedRL，鲁棒聚合能否改善异质 client |
-| `FedTrimmedMean-SAC` | client actor 做逐参数 trimmed mean 聚合，critic 保持本地 | 比 median 更平滑的鲁棒聚合是否更稳 |
-| `Attention-SAC-lite` | 用 performance index 和 actor 距离构造 attention 权重聚合 actor | 参考 FedFormer，context-aware federation 是否优于简单平均 |
+| `RobustFed-SAC-Median` | client actor 做逐参数 median 聚合，critic 保持本地 | 鲁棒聚合思想在异质 client 下是否改善稳定性 |
+| `RobustFed-SAC-TrimmedMean` | client actor 做逐参数 trimmed mean 聚合，critic 保持本地 | 比 median 更平滑的鲁棒聚合是否更稳 |
+| `ContextFed-SAC-lite` | 用 performance index 和 actor 距离构造 context-aware 权重聚合 actor | 轻量上下文聚合是否优于简单平均 |
 | `FedAvg-DQN` | 多 worker 本地 DQN，周期性 FedAvg 聚合 Q-network | 参考 Federated-DRL，DQN 系联邦方法和 SAC 系方法的差异 |
 
 论文里的 FSAC 复现为本项目的 `Paper-FSAC`：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。
@@ -329,7 +329,13 @@ python -m src.main \
 | `comm_upload_bytes` | 实际上传 actor 参数量估计 |
 | `comm_full_traj_bytes` | 假设上传完整 trajectory 的通信量估计 |
 
-主曲线默认使用 `eval_reward_mean`，即当前策略评估回报；`best_fitness` / `archive_best` 只作为辅助表格或附图指标，避免把历史最优和当前性能混在同一主图里。
+主曲线默认使用 `eval_reward_mean`，即当前策略评估回报；`best_fitness` / `archive_best` 只作为辅助表格或附图指标，避免把历史最优和当前性能混在同一主图里。横向比较需要同时报告三种视角：
+
+- reward vs raw environment steps：样本效率，但需说明 FedEvoFSAC 的 steps 包含 population evaluation。
+- reward vs communication round / generation：联邦通信效率。
+- reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
+
+最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。CartPole 只作为 sanity check；核心证据优先放在 Acrobot 和 LunarLander。LunarLander 结论应写成强异质下相对改善，而不是声称完全解决异质性退化。
 
 ## 12. 当前实现状态
 

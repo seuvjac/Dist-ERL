@@ -103,11 +103,11 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
             elif mode in ('fedbest_sac', 'fedbest_fsac'):
                 label = 'FedBest-SAC'
             elif mode in ('fedmedian_sac', 'fedmedian_fsac'):
-                label = 'FedMedian-SAC'
+                label = 'RobustFed-SAC-Median'
             elif mode in ('fedtrimmedmean_sac', 'fedtrimmedmean_fsac'):
-                label = 'FedTrimmedMean-SAC'
+                label = 'RobustFed-SAC-TrimmedMean'
             elif mode in ('attention_sac_lite', 'attention_fsac_lite'):
-                label = 'Attention-SAC-lite'
+                label = 'ContextFed-SAC-lite'
             elif mode == 'fedavg_dqn':
                 label = 'FedAvg-DQN'
             runs.append({
@@ -154,9 +154,9 @@ def main():
         'FedSoftmax-SAC-noEA': '#009E73',
         'FedBest-SAC': '#E69F00',
         'EvoSAC-noFed': '#CC79A7',
-        'FedMedian-SAC': '#332288',
-        'FedTrimmedMean-SAC': '#882255',
-        'Attention-SAC-lite': '#44AA99',
+        'RobustFed-SAC-Median': '#332288',
+        'RobustFed-SAC-TrimmedMean': '#882255',
+        'ContextFed-SAC-lite': '#44AA99',
         'FedAvg-DQN': '#117733',
     }
     for env in envs:
