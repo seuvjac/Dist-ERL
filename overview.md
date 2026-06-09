@@ -190,7 +190,7 @@ FedEvoFSAC-no_ea_injection
 FedEvoFSAC-no_heterogeneity
 ```
 
-当前对照组只保留 SAC / FSAC：
+当前同协议对照组只保留 SAC / FSAC / DQN：
 
 ```text
 Paper-SAC
@@ -204,7 +204,9 @@ Attention-SAC-lite
 FedAvg-DQN
 ```
 
-说明：当前实验不再把 SB3 和 `EvoSAC-noFed` 放入主横向对照组。主算法维持使用 `FedEvoFSAC`；横向对照只保留 SAC / FSAC / DQN 系联邦方法。FedEvoFSAC 的模块消融单独出图，不和其他算法混在同一张横向对比图里。
+说明：当前实验不再把 SB3 和 `EvoSAC-noFed` 放入主横向对照组。主算法维持使用 `FedEvoFSAC`；横向对照只保留同协议 SAC / FSAC / DQN 系联邦方法。FedEvoFSAC 的模块消融单独出图，不和其他算法混在同一张横向对比图里。
+
+这里的 `FedAvg-SAC`、`FedMedian-SAC`、`FedTrimmedMean-SAC`、`Attention-SAC-lite` 是**同协议内部基线**：它们统一使用本项目的三环境、异质 client 设置、日志格式和评估协议，用来拆解聚合规则本身的影响。它们不是外部论文的严格原代码复现，不能在论文图注里写成 external baseline。若需要和论文方法比较，必须使用外部仓库的原代码单独跑 external-original comparison。
 
 各对照组含义：
 
@@ -222,14 +224,21 @@ FedAvg-DQN
 
 论文里的 FSAC 复现为本项目的 `Paper-FSAC`：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。
 
-已下载的同类代码只作为算法思想和工程参考，不直接混入主图原始结果；主图中的曲线统一用本项目的三环境、FSAC 网络、日志和评估协议生成：
+外部论文原代码复现作为单独的 external-original comparison 管理，不直接和同协议内部基线混名。原因是这些仓库支持的环境、依赖和训练协议不同；能在相同环境上运行的才放入外部复现图。外部复现结果不参与 FedEvoFSAC 消融图，也不和内部同协议曲线混称为同一类 baseline。
 
-| 外部代码 | 实际 RL 主体 | 本地路径 | 对应到本项目的曲线 |
-|----------|--------------|----------|--------------------|
-| FedFormer | SAC | `/home/ywj/code/FedFormer` | `Attention-SAC-lite` |
-| Byzantine-Federated-RL / FedPG-BR | policy gradient | `/home/ywj/code/Byzantine-Federated-RL` | `FedMedian-SAC`, `FedTrimmedMean-SAC` 作为鲁棒聚合思想对照 |
-| Federated-DRL | DQN / DDQN | `/home/ywj/code/Federated-DRL` | `FedAvg-DQN` |
-| FederatedRL | PPO | `/home/ywj/code/FederatedRL` | related work，不进主图 |
+| 外部代码 | 实际 RL 主体 | 本地路径 | 可比环境 | 使用方式 |
+|----------|--------------|----------|----------|----------|
+| FedFormer | SAC | `/home/ywj/code/FedFormer` | MetaWorld MT10，不是 CartPole/Acrobot/LunarLander | related work 或单独 MetaWorld 复现，不放三环境主图 |
+| Byzantine-Federated-RL / FedPG-BR | policy gradient | `/home/ywj/code/Byzantine-Federated-RL` | CartPole-v1、LunarLander-v2、HalfCheetah-v2 | 可作为 CartPole/LunarLander 外部原代码复现 |
+| Federated-DRL | DQN / DDQN | `/home/ywj/code/Federated-DRL` | CartPole-v1、LunarLander-v2、Mario | 可作为 FedAvg-DQN 外部原代码复现 |
+| FederatedRL | PPO | `/home/ywj/code/FederatedRL` | CartPole-v1、若干 MuJoCo/IoT 任务 | 可作为 PPO-FedRL related work，默认不进三环境主图 |
+
+当前可严格复现的外部对照边界：
+
+- `CartPole-v1`：可跑 `Federated-DRL` 的 FedAvg-DQN/DDQN 原代码，也可跑 `Byzantine-Federated-RL` 的 FedPG-BR 原代码。
+- `LunarLander`：外部仓库多使用 `LunarLander-v2`，本项目主环境是 Gymnasium 的 `LunarLander-v3`；可做外部复现图，但图注必须说明环境版本不同。
+- `Acrobot-v1`：当前已下载外部仓库没有直接支持 Acrobot 的原代码复现，不强行改源码充当 strict reproduction。
+- `FedFormer`：原论文是 MetaWorld 连续控制 SAC，不适合直接放入 CartPole/Acrobot/LunarLander 三环境主图；若要比较，应另开 MetaWorld 复现实验。
 
 ## 10. 实验脚本
 
@@ -279,6 +288,14 @@ FED_VARIANTS="full uniform_aggregation no_local_rl no_ea_injection no_heterogene
 ./run_fsac_paper_baseline.sh
 ```
 
+只跑外部论文原代码复现：
+
+```bash
+./run_external_original_baselines.sh
+```
+
+该脚本只调用 `/home/ywj/code` 下的外部仓库，并把输出整理到 `external_original_logs/`。它依赖外部仓库自己的 Python/Gym/PyTorch 版本；如果当前 conda 环境不兼容，应单独建对应环境后用 `EXTERNAL_PYTHON=/path/to/python ./run_external_original_baselines.sh` 运行。
+
 快速 smoke：
 
 ```bash
@@ -311,6 +328,8 @@ python -m src.main \
 | `archive_best` | global elite archive 历史最佳 fitness |
 | `comm_upload_bytes` | 实际上传 actor 参数量估计 |
 | `comm_full_traj_bytes` | 假设上传完整 trajectory 的通信量估计 |
+
+主曲线默认使用 `eval_reward_mean`，即当前策略评估回报；`best_fitness` / `archive_best` 只作为辅助表格或附图指标，避免把历史最优和当前性能混在同一主图里。
 
 ## 12. 当前实现状态
 

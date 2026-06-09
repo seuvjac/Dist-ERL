@@ -24,6 +24,8 @@ def parse_args():
                    help='Use raw env steps, per-run progress percentage, or logged generation/round as x-axis')
     p.add_argument('--max-x', type=float, default=None,
                    help='Optional x-axis cap after x-axis conversion')
+    p.add_argument('--metric', default='current', choices=['current', 'best'],
+                   help='current uses eval_reward_mean; best uses best/archive-style optimistic score')
     return p.parse_args()
 
 
@@ -36,7 +38,7 @@ def _num(v):
         return np.nan
 
 
-def load_runs(log_dirs, plot_kind='comparison', x_axis='steps'):
+def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'):
     runs = []
     for log_dir in log_dirs:
         root = Path(log_dir)
@@ -52,12 +54,15 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps'):
                         x = _num(row.get('generation'))
                     else:
                         x = _num(row.get('total_env_steps'))
-                    vals = [
-                        _num(row.get('eval_reward_mean')),
-                        _num(row.get('eval_ea_mean')),
-                        _num(row.get('best_fitness')),
-                        _num(row.get('archive_best')),
-                    ]
+                    if metric == 'current':
+                        vals = [_num(row.get('eval_reward_mean'))]
+                    else:
+                        vals = [
+                            _num(row.get('eval_reward_mean')),
+                            _num(row.get('eval_ea_mean')),
+                            _num(row.get('best_fitness')),
+                            _num(row.get('archive_best')),
+                        ]
                     finite = [v for v in vals if np.isfinite(v)]
                     if np.isfinite(x) and finite:
                         xs.append(x)
@@ -124,7 +129,8 @@ def main():
         log_dirs.append(args.paper_log_dir)
     if args.dqn_log_dir:
         log_dirs.append(args.dqn_log_dir)
-    runs = load_runs(log_dirs, plot_kind=args.plot_kind, x_axis=args.x_axis)
+    runs = load_runs(
+        log_dirs, plot_kind=args.plot_kind, x_axis=args.x_axis, metric=args.metric)
     if args.max_x is not None:
         capped = []
         for run in runs:
@@ -181,7 +187,8 @@ def main():
         else:
             xlabel = 'Environment steps'
         ax.set_xlabel(xlabel)
-        ax.set_ylabel('Best evaluation score')
+        ylabel = 'Evaluation return' if args.metric == 'current' else 'Best evaluation score'
+        ax.set_ylabel(ylabel)
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
         fig.tight_layout()

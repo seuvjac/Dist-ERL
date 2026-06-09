@@ -28,6 +28,12 @@ apply_headless_mujoco_runtime()
 warnings.filterwarnings('ignore', category=DeprecationWarning, module='gymnasium')
 
 
+def _client_phase(client_id: int) -> float:
+    """Symmetric client phases; first four clients cover both easier/harder sides."""
+    phases = (-1.0, -1.0 / 3.0, 1.0 / 3.0, 1.0, -2.0 / 3.0, 0.0, 2.0 / 3.0)
+    return phases[int(client_id) % len(phases)]
+
+
 def resolve_gym_env_id(env_name: str) -> str:
     """Map paper-style MuJoCo-v2 IDs to runnable Gymnasium env IDs."""
     return MUJOCO_V2_RUNTIME_MAP.get(env_name, env_name)
@@ -47,12 +53,19 @@ class HeterogeneousClientEnv(gym.Wrapper):
         self.client_id = int(client_id)
         self.heterogeneity = max(0.0, float(heterogeneity))
         self.mode = mode
-        phase = ((self.client_id % 7) - 3) / 3.0
+        phase = _client_phase(self.client_id)
         noisy_mode = mode in ('reward_action_noise', 'mixed', 'env_params')
         self.reward_scale = 1.0 + (0.15 * self.heterogeneity * phase if noisy_mode else 0.0)
         self.reward_bias = 0.02 * self.heterogeneity * phase if noisy_mode else 0.0
-        self.action_noise = 0.03 * self.heterogeneity * (1 + (self.client_id % 3)) if noisy_mode else 0.0
-        self.observation_noise = 0.01 * self.heterogeneity * (1 + (self.client_id % 2)) if noisy_mode else 0.0
+        noise_boost = 2.0 if mode == 'mixed' else 1.0
+        self.action_noise = (
+            0.035 * noise_boost * self.heterogeneity * (1 + (self.client_id % 3))
+            if noisy_mode else 0.0
+        )
+        self.observation_noise = (
+            0.012 * noise_boost * self.heterogeneity * (1 + (self.client_id % 2))
+            if noisy_mode else 0.0
+        )
         self.seed_offset = self.client_id * 9973
         self._rng = np.random.default_rng(self.seed_offset)
 
@@ -84,7 +97,7 @@ def _client_env_kwargs(env_name: str, client_id: int, heterogeneity: float, mode
     """Best-effort Gymnasium kwargs for literature-style client heterogeneity."""
     if heterogeneity <= 0 or mode in ('none', 'reward_action_noise'):
         return {}
-    phase = ((int(client_id) % 7) - 3) / 3.0
+    phase = _client_phase(client_id)
     strength = float(heterogeneity) * phase
 
     if env_name == 'Pendulum-v1':
@@ -108,7 +121,7 @@ def _apply_classic_control_heterogeneity(
 ) -> None:
     if heterogeneity <= 0 or mode in ('none', 'reward_action_noise'):
         return
-    phase = ((int(client_id) % 7) - 3) / 3.0
+    phase = _client_phase(client_id)
     strength = float(heterogeneity) * phase
     base = env.unwrapped
     if env_name == 'Acrobot-v1':
@@ -137,19 +150,19 @@ def _apply_classic_control_heterogeneity(
         return
     if env_name != 'CartPole-v1':
         return
-    scale_boost = 2.0 if mode == 'mixed' else 1.0
+    scale_boost = 3.0 if mode == 'mixed' else 1.0
     if hasattr(base, 'gravity'):
-        base.gravity = 9.8 * (1.0 + 0.22 * scale_boost * strength)
+        base.gravity = 9.8 * max(0.35, 1.0 + 0.30 * scale_boost * strength)
     if hasattr(base, 'masscart'):
-        base.masscart = 1.0 * max(0.35, 1.0 + 0.30 * scale_boost * strength)
+        base.masscart = 1.0 * max(0.25, 1.0 + 0.45 * scale_boost * strength)
     if hasattr(base, 'masspole'):
-        base.masspole = 0.1 * max(0.30, 1.0 - 0.30 * scale_boost * strength)
+        base.masspole = 0.1 * max(0.25, 1.0 - 0.45 * scale_boost * strength)
     if hasattr(base, 'length'):
-        base.length = 0.5 * max(0.30, 1.0 + 0.40 * scale_boost * strength)
+        base.length = 0.5 * max(0.20, 1.0 + 0.60 * scale_boost * strength)
     if hasattr(base, 'force_mag'):
-        base.force_mag = 10.0 * max(0.35, 1.0 - 0.25 * scale_boost * strength)
+        base.force_mag = 10.0 * max(0.25, 1.0 - 0.45 * scale_boost * strength)
     if hasattr(base, 'tau'):
-        base.tau = 0.02 * max(0.50, 1.0 + 0.15 * scale_boost * strength)
+        base.tau = 0.02 * max(0.35, 1.0 + 0.25 * scale_boost * strength)
     if hasattr(base, 'masscart') and hasattr(base, 'masspole'):
         base.total_mass = base.masscart + base.masspole
     if hasattr(base, 'masspole') and hasattr(base, 'length'):

@@ -16,6 +16,9 @@ PAPER_LOG_DIR=${PAPER_LOG_DIR:-"logs_fsac_paper_mixed"}
 DQN_LOG_DIR=${DQN_LOG_DIR:-"logs_dqn_fedrl_mixed"}
 COMPARISON_OUT_DIR=${COMPARISON_OUT_DIR:-"plots/fedrl_comparison_mixed"}
 ABLATION_OUT_DIR=${ABLATION_OUT_DIR:-"plots/fedrl_ablations_mixed"}
+SUMMARY_OUT_DIR=${SUMMARY_OUT_DIR:-"plots/fedrl_tables_mixed"}
+PLOT_X_AXIS=${PLOT_X_AXIS:-"progress"}
+PLOT_METRIC=${PLOT_METRIC:-"current"}
 CLIENT_HETEROGENEITY=${CLIENT_HETEROGENEITY:-"0.60"}
 CLIENT_HETEROGENEITY_MODE=${CLIENT_HETEROGENEITY_MODE:-"mixed"}
 
@@ -119,11 +122,29 @@ python3 scripts/plot_fedrl_heterogeneous.py \
   --paper-log-dir "$PAPER_LOG_DIR" \
   --dqn-log-dir "$DQN_LOG_DIR" \
   --out-dir "$COMPARISON_OUT_DIR" \
-  --plot-kind comparison
+  --plot-kind comparison \
+  --x-axis "$PLOT_X_AXIS" \
+  --metric "$PLOT_METRIC"
 
 python3 scripts/plot_fedrl_heterogeneous.py \
   --fed-log-dir "$LOG_DIR" \
   --paper-log-dir "" \
   --dqn-log-dir "" \
   --out-dir "$ABLATION_OUT_DIR" \
+  --plot-kind ablation \
+  --x-axis "$PLOT_X_AXIS" \
+  --metric "$PLOT_METRIC"
+
+python3 scripts/summarize_fedrl_results.py \
+  --fed-log-dir "$LOG_DIR" \
+  --paper-log-dir "$PAPER_LOG_DIR" \
+  --dqn-log-dir "$DQN_LOG_DIR" \
+  --out-dir "$SUMMARY_OUT_DIR" \
+  --plot-kind comparison
+
+python3 scripts/summarize_fedrl_results.py \
+  --fed-log-dir "$LOG_DIR" \
+  --paper-log-dir "" \
+  --dqn-log-dir "" \
+  --out-dir "$SUMMARY_OUT_DIR" \
   --plot-kind ablation
