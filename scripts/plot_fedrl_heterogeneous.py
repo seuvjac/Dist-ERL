@@ -20,6 +20,10 @@ def parse_args():
     p.add_argument('--plot-kind', default='comparison',
                    choices=['comparison', 'ablation', 'all'],
                    help='comparison excludes FedEvoFSAC ablations and EvoSAC-noFed; ablation plots only FedEvoFSAC variants')
+    p.add_argument('--x-axis', default='steps', choices=['steps', 'progress', 'round'],
+                   help='Use raw env steps, per-run progress percentage, or logged generation/round as x-axis')
+    p.add_argument('--max-x', type=float, default=None,
+                   help='Optional x-axis cap after x-axis conversion')
     return p.parse_args()
 
 
@@ -32,7 +36,7 @@ def _num(v):
         return np.nan
 
 
-def load_runs(log_dirs, plot_kind='comparison'):
+def load_runs(log_dirs, plot_kind='comparison', x_axis='steps'):
     runs = []
     for log_dir in log_dirs:
         root = Path(log_dir)
@@ -44,7 +48,10 @@ def load_runs(log_dirs, plot_kind='comparison'):
             xs, ys = [], []
             with metrics.open(newline='', encoding='utf-8') as f:
                 for row in csv.DictReader(f):
-                    x = _num(row.get('total_env_steps'))
+                    if x_axis == 'round':
+                        x = _num(row.get('generation'))
+                    else:
+                        x = _num(row.get('total_env_steps'))
                     vals = [
                         _num(row.get('eval_reward_mean')),
                         _num(row.get('eval_ea_mean')),
@@ -57,6 +64,10 @@ def load_runs(log_dirs, plot_kind='comparison'):
                         ys.append(max(finite))
             if len(xs) < 1:
                 continue
+            if x_axis == 'progress':
+                denom = max(xs)
+                if denom > 0:
+                    xs = [100.0 * x / denom for x in xs]
             mode = meta.get('mode', metrics.parent.name)
             if str(mode).startswith('sb3_'):
                 continue
@@ -113,7 +124,17 @@ def main():
         log_dirs.append(args.paper_log_dir)
     if args.dqn_log_dir:
         log_dirs.append(args.dqn_log_dir)
-    runs = load_runs(log_dirs, plot_kind=args.plot_kind)
+    runs = load_runs(log_dirs, plot_kind=args.plot_kind, x_axis=args.x_axis)
+    if args.max_x is not None:
+        capped = []
+        for run in runs:
+            mask = run['x'] <= args.max_x
+            if np.any(mask):
+                run = dict(run)
+                run['x'] = run['x'][mask]
+                run['y'] = run['y'][mask]
+                capped.append(run)
+        runs = capped
     envs = args.envs or sorted({r['env'] for r in runs})
     colors = {
         'FedEvoFSAC-full': '#D55E00',
@@ -153,7 +174,13 @@ def main():
         else:
             title = f'{env}: FedEvoFSAC vs FedRL baselines'
         ax.set_title(title)
-        ax.set_xlabel('Environment steps')
+        if args.x_axis == 'progress':
+            xlabel = 'Training progress (%)'
+        elif args.x_axis == 'round':
+            xlabel = 'Communication round / generation'
+        else:
+            xlabel = 'Environment steps'
+        ax.set_xlabel(xlabel)
         ax.set_ylabel('Best evaluation score')
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
