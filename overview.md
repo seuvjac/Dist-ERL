@@ -17,8 +17,8 @@ LunarLander-v3
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
 | `CartPole-v1` | discrete | gravity、cart mass、pole mass、pole length、force magnitude、integration timestep、observation/reward/action perturbation |
-| `Acrobot-v1` | discrete | link length、link mass、center of mass、available torque、joint velocity limits、integration timestep、observation/reward/action perturbation |
-| `LunarLander-v3` | discrete | gravity、wind、turbulence |
+| `Acrobot-v1` | discrete | 更强 link length / mass / center of mass 差异、available torque、joint velocity limits、integration timestep、observation/reward/action perturbation |
+| `LunarLander-v3` | discrete | 更强 gravity、wind、turbulence、observation/reward/action perturbation |
 
 因此，本项目不再把 MuJoCo / Pendulum / 连续动作环境作为当前主实验对象。
 
@@ -28,7 +28,7 @@ LunarLander-v3
 |------|-----------------------------|------|------|
 | `dynamics_mild` | `env_params_only` | `0.25` | 只改变客户端物理参数，如 gravity、mass、length、wind |
 | `sensor_reward` | `reward_action_noise` | `0.35` | 原始动力学不变，只改变观测噪声、reward scale/bias 和 seed stream |
-| `mixed_hard` | `mixed` | `0.50` | 同时改变动力学参数与观测/奖励/动作扰动，作为最难异质场景 |
+| `mixed_hard` | `mixed` | `0.50`-`0.60` | 同时改变动力学参数与观测/奖励/动作扰动，作为最难异质场景；Acrobot 和 LunarLander 默认使用更强 mixed 版本 |
 
 这样可以区分三类问题：动力学 non-IID、感知/奖励 non-IID，以及混合强异质 non-IID。
 

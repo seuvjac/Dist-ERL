@@ -57,7 +57,11 @@ class HeterogeneousClientEnv(gym.Wrapper):
         noisy_mode = mode in ('reward_action_noise', 'mixed', 'env_params')
         self.reward_scale = 1.0 + (0.15 * self.heterogeneity * phase if noisy_mode else 0.0)
         self.reward_bias = 0.02 * self.heterogeneity * phase if noisy_mode else 0.0
-        noise_boost = 2.0 if mode == 'mixed' else 1.0
+        noise_boost = 2.5 if mode == 'mixed' else 1.0
+        if self.env.unwrapped.__class__.__name__.lower().startswith('lunar'):
+            noise_boost *= 1.25
+        if self.env.unwrapped.__class__.__name__.lower().startswith('acrobot'):
+            noise_boost *= 1.15
         self.action_noise = (
             0.035 * noise_boost * self.heterogeneity * (1 + (self.client_id % 3))
             if noisy_mode else 0.0
@@ -103,11 +107,12 @@ def _client_env_kwargs(env_name: str, client_id: int, heterogeneity: float, mode
     if env_name == 'Pendulum-v1':
         return {'g': max(4.0, 10.0 * (1.0 + 0.25 * strength))}
     if env_name == 'LunarLander-v3':
+        scale_boost = 1.8 if mode == 'mixed' else 1.0
         return {
-            'gravity': float(np.clip(-10.0 * (1.0 + 0.18 * strength), -12.0, -8.0)),
+            'gravity': float(np.clip(-10.0 * (1.0 + 0.18 * scale_boost * strength), -11.8, -6.0)),
             'enable_wind': True,
-            'wind_power': float(np.clip(8.0 + 8.0 * strength, 0.0, 20.0)),
-            'turbulence_power': float(np.clip(1.0 + 1.5 * strength, 0.0, 3.0)),
+            'wind_power': float(np.clip(10.0 + 12.0 * scale_boost * strength, 0.0, 20.0)),
+            'turbulence_power': float(np.clip(1.2 + 1.0 * scale_boost * strength, 0.0, 2.0)),
         }
     return {}
 
@@ -125,28 +130,28 @@ def _apply_classic_control_heterogeneity(
     strength = float(heterogeneity) * phase
     base = env.unwrapped
     if env_name == 'Acrobot-v1':
-        scale_boost = 2.0 if mode == 'mixed' else 1.0
+        scale_boost = 2.6 if mode == 'mixed' else 1.0
         for attr, base_value, scale in (
-            ('LINK_LENGTH_1', 1.0, 0.35),
-            ('LINK_LENGTH_2', 1.0, -0.30),
-            ('LINK_MASS_1', 1.0, 0.35),
-            ('LINK_MASS_2', 1.0, -0.35),
-            ('LINK_COM_POS_1', 0.5, 0.25),
-            ('LINK_COM_POS_2', 0.5, -0.25),
+            ('LINK_LENGTH_1', 1.0, 0.42),
+            ('LINK_LENGTH_2', 1.0, -0.38),
+            ('LINK_MASS_1', 1.0, 0.45),
+            ('LINK_MASS_2', 1.0, -0.45),
+            ('LINK_COM_POS_1', 0.5, 0.32),
+            ('LINK_COM_POS_2', 0.5, -0.32),
         ):
             if hasattr(base, attr):
-                setattr(base, attr, base_value * max(0.25, 1.0 + scale * scale_boost * strength))
+                setattr(base, attr, base_value * max(0.18, 1.0 + scale * scale_boost * strength))
         if hasattr(base, 'g'):
-            base.g = 9.8 * max(0.50, 1.0 + 0.35 * scale_boost * strength)
+            base.g = 9.8 * max(0.35, 1.0 + 0.45 * scale_boost * strength)
         if hasattr(base, 'AVAIL_TORQUE'):
-            torque_scale = max(0.35, 1.0 - 0.30 * scale_boost * strength)
+            torque_scale = max(0.22, 1.0 - 0.42 * scale_boost * strength)
             base.AVAIL_TORQUE = [float(t * torque_scale) for t in (-1.0, 0.0, 1.0)]
         if hasattr(base, 'MAX_VEL_1'):
-            base.MAX_VEL_1 = 4 * np.pi * max(0.50, 1.0 + 0.20 * scale_boost * strength)
+            base.MAX_VEL_1 = 4 * np.pi * max(0.35, 1.0 + 0.30 * scale_boost * strength)
         if hasattr(base, 'MAX_VEL_2'):
-            base.MAX_VEL_2 = 9 * np.pi * max(0.50, 1.0 - 0.20 * scale_boost * strength)
+            base.MAX_VEL_2 = 9 * np.pi * max(0.35, 1.0 - 0.30 * scale_boost * strength)
         if hasattr(base, 'dt'):
-            base.dt = 0.2 * max(0.50, 1.0 + 0.15 * scale_boost * strength)
+            base.dt = 0.2 * max(0.35, 1.0 + 0.25 * scale_boost * strength)
         return
     if env_name != 'CartPole-v1':
         return
