@@ -1,28 +1,28 @@
-# FedEvoFSAC / Dist-ERL
+# FedEvoSAC / Dist-ERL
 
 ## 1. Federated RL 问题设定
 
-本项目当前主线研究离散动作控制环境：
+本项目当前主线研究连续动作异质控制环境：
 
 ```text
-CartPole-v1
-MountainCar-v0
-Acrobot-v1
-LunarLander-v3
+LunarLanderContinuous-v3
+BipedalWalker-v3
+HalfCheetah-v5
+Hopper-v5
 ```
 
-每个 client 拥有自己的私有环境、私有 replay buffer 和本地 learner。client 之间不共享 trajectory，服务器只能接收 actor 参数、reward / fitness 等标量统计信息。
+每个 client 拥有自己的私有环境、私有 replay buffer 和本地 SAC learner。client 之间不共享 trajectory，服务器只能接收 actor 参数、reward / fitness 等标量统计信息；critic、target critic、temperature 和 replay buffer 全部留在本地。
 
 异质性来自不同 client 的局部 MDP 扰动：
 
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
-| `CartPole-v1` | discrete | gravity、cart mass、pole mass、pole length、force magnitude、integration timestep、observation/reward/action perturbation |
-| `MountainCar-v0` | discrete | engine force、gravity、goal position、minimum position、max speed、observation/reward/action perturbation |
-| `Acrobot-v1` | discrete | 更强 link length / mass / center of mass 差异、available torque、joint velocity limits、integration timestep、observation/reward/action perturbation |
-| `LunarLander-v3` | discrete | 更强 gravity、wind、turbulence、observation/reward/action perturbation |
+| `LunarLanderContinuous-v3` | continuous | gravity、wind、turbulence、observation/reward/action perturbation |
+| `BipedalWalker-v3` | continuous | gravity、motor strength、hip/knee speed、observation/reward/action perturbation |
+| `HalfCheetah-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
+| `Hopper-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 
-离散环境现在保留为 sanity / preliminary 线路。CartPole 主要作为 sanity check；MountainCar、Acrobot 和 LunarLander 用于探索困难和强异质性的离散附线。主论文方向切换到连续 FedEvoSAC。
+离散环境现在保留为 sanity / preliminary 线路。`CartPole-v1`、`MountainCar-v0`、`Acrobot-v1` 和 `LunarLander-v3` 可用于验证 discrete FedEvoFSAC 是否能跑通，但不再作为主论文的核心证据。
 
 当前在每个原始环境上定义三种异质联邦场景：
 
@@ -98,10 +98,11 @@ python -m src.main --mode fed_evo_rl --algorithm SAC --env LunarLanderContinuous
    - 执行 elitism、tournament selection、row-wise crossover、bounded mutation；
    - 维护 global elite archive，防止历史最优 actor 被后续扰动覆盖。
 
-3. **本地 FSAC 更新**
+3. **本地 SAC 更新**
    - 每隔 `K` 代，server 将当前 best actor 下发给部分 clients；
    - client 用该 actor rollout，transition 写入私有 replay buffer；
-   - client 本地训练 discrete SAC actor、critic1、critic2 和 temperature；
+   - 连续主线中 client 本地训练 continuous SAC actor、critic1、critic2 和 temperature；
+   - 离散附线中 client 本地训练 discrete SAC / FSAC；
    - 上传更新后的 actor 参数和本地 reward 摘要。
 
 4. **联邦 actor 聚合**
@@ -109,9 +110,26 @@ python -m src.main --mode fed_evo_rl --algorithm SAC --env LunarLanderContinuous
    - 默认使用 softmax 权重、低分 client 过滤和 delta norm clipping；
    - 聚合 actor 通过 soft injection 注入 EA population 的弱 non-elite 个体。
 
-## 5. FSAC：Federated Discrete SAC
+## 5. Continuous SAC 和离散 FSAC
 
-这里的 FSAC 是 **Federated Soft Actor-Critic**。因为三个环境都是离散动作，所以本项目实现的是 discrete SAC：
+连续主线使用 `SACPolicy`，actor 是 tanh-squashed Gaussian policy：
+
+```text
+actor(s) -> mean(s), log_std(s)
+a = tanh(mean + std * epsilon)
+critic1(s,a), critic2(s,a) -> Q values
+```
+
+本地更新目标：
+
+```text
+y = r + gamma * (1 - done) * (min(Q1_t,Q2_t)(s',a') - alpha * log pi(a'|s'))
+critic_loss = Huber(Q1(s,a), y) + Huber(Q2(s,a), y)
+actor_loss = E[alpha * log pi(a|s) - min(Q1,Q2)(s,a)]
+alpha_loss = -log_alpha * (log pi(a|s) + target_entropy)
+```
+
+离散附线保留 `FSACPolicy`。这里的 FSAC 是 **Federated Soft Actor-Critic**，实现为 discrete SAC：
 
 ```text
 actor(s) -> logits over discrete actions
@@ -128,11 +146,11 @@ critic_loss = Huber(Q1(s,a), y) + Huber(Q2(s,a), y)
 actor_loss = sum_a pi(a|s) * (alpha * log pi(a|s) - min(Q1,Q2)(s,a))
 ```
 
-temperature `alpha` 使用可学习参数 `log_alpha`，target entropy 取 `0.98 * log(|A|)`。
+temperature `alpha` 使用可学习参数 `log_alpha`。连续 SAC 的 target entropy 默认取 `-|A|`，离散 FSAC 的 target entropy 取 `0.98 * log(|A|)`。
 
 ## 6. EA 进化什么，不进化什么
 
-FedEvoFSAC 的 EA genotype 只包含：
+FedEvoSAC / FedEvoFSAC 的 EA genotype 只包含：
 
 ```text
 actor.*
@@ -178,7 +196,7 @@ actor_prefix = "actor."
 
 ## 8. 联邦聚合
 
-FedEvoFSAC 聚合的是 client 上传的 actor 参数，不聚合 trajectory，也不聚合 critic。
+FedEvoSAC 聚合的是 client 上传的 actor 参数，不聚合 trajectory，也不聚合 critic。离散 FedEvoFSAC 使用同一条 actor-only sharing 原则。
 
 默认机制：
 
@@ -202,19 +220,28 @@ theta_fed = theta_best + sum_i w_i * delta_i
 
 ## 9. Baseline 和对比曲线
 
-主实验只比较离散环境。
-
-FedEvoFSAC 家族内部消融：
+连续主实验只比较 continuous SAC 系方法：
 
 ```text
-FedEvoFSAC-full
-FedEvoFSAC-uniform_aggregation
-FedEvoFSAC-no_local_rl
-FedEvoFSAC-no_ea_injection
-FedEvoFSAC-no_heterogeneity
+Independent-SAC
+FedAvg-SAC
+FedBest-SAC
+FedSoftmax-SAC-noEA
+RobustFed-SAC-Median
+FedEvoSAC
 ```
 
-当前同协议对照组只保留 SAC / FSAC / DQN：
+FedEvoSAC 家族内部消融可以沿用：
+
+```text
+FedEvoSAC-full
+FedEvoSAC-uniform_aggregation
+FedEvoSAC-no_local_rl
+FedEvoSAC-no_ea_injection
+FedEvoSAC-no_heterogeneity
+```
+
+离散附线仍可使用原来的 FSAC / DQN 对照：
 
 ```text
 Paper-SAC
@@ -228,48 +255,45 @@ ContextFed-SAC-lite
 FedAvg-DQN
 ```
 
-说明：当前实验不再把 SB3 和 `EvoSAC-noFed` 放入主横向对照组。主算法维持使用 `FedEvoFSAC`；横向对照只保留同协议 SAC / FSAC / DQN 系联邦方法。FedEvoFSAC 的模块消融单独出图，不和其他算法混在同一张横向对比图里。
+说明：连续主图不再放入 SB3、DQN、离散 FSAC 或 `EvoSAC-noFed`。主算法为 `FedEvoSAC`；横向对照只保留同协议 continuous SAC 系联邦方法。FedEvoSAC 的模块消融单独出图，不和其他算法混在同一张横向对比图里。
 
-这里的 `FedAvg-SAC`、`RobustFed-SAC-Median`、`RobustFed-SAC-TrimmedMean`、`ContextFed-SAC-lite` 是**同协议内部基线**：它们统一使用本项目的三环境、异质 client 设置、日志格式和评估协议，用来拆解聚合规则本身的影响。它们不是外部论文的严格原代码复现，不能在论文图注里写成 external baseline。若需要和论文方法比较，必须使用外部仓库的原代码单独跑 external-original comparison。
+这里的 `FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median` 是**同协议内部基线**：它们统一使用本项目的连续环境、异质 client 设置、日志格式和评估协议，用来拆解聚合规则本身的影响。它们不是外部论文的严格原代码复现，不能在论文图注里写成 external baseline。若需要和论文方法比较，必须使用外部仓库的原代码单独跑 external-original comparison。
 
 各对照组含义：
 
 | 曲线 | 含义 | 主要回答的问题 |
 |------|------|----------------|
-| `Paper-SAC` | 多 worker 本地 discrete SAC，不共享 actor | 没有联邦共享时 SAC 的表现 |
-| `Paper-FSAC` | 论文式 FSAC：最优 worker actor 与本地 actor 做 Boltzmann blending | 论文式 best-worker 共享是否有效 |
+| `Independent-SAC` | 多 worker 本地 continuous SAC，不共享 actor | 没有联邦共享时 SAC 的表现 |
 | `FedAvg-SAC` | client actor 做均匀平均，critic 保持本地 | 普通 FedAvg actor 聚合是否足够 |
 | `FedSoftmax-SAC-noEA` | client actor 按 performance index softmax 加权聚合，无 EA | reward-aware federation 在没有 EA 时的贡献 |
 | `FedBest-SAC` | 每轮将最优 worker actor 广播给所有 worker | 贪心 best-worker 共享是否稳定 |
 | `RobustFed-SAC-Median` | client actor 做逐参数 median 聚合，critic 保持本地 | 鲁棒聚合思想在异质 client 下是否改善稳定性 |
-| `RobustFed-SAC-TrimmedMean` | client actor 做逐参数 trimmed mean 聚合，critic 保持本地 | 比 median 更平滑的鲁棒聚合是否更稳 |
-| `ContextFed-SAC-lite` | 用 performance index 和 actor 距离构造 context-aware 权重聚合 actor | 轻量上下文聚合是否优于简单平均 |
-| `FedAvg-DQN` | 多 worker 本地 DQN，周期性 FedAvg 聚合 Q-network | 参考 Federated-DRL，DQN 系联邦方法和 SAC 系方法的差异 |
+| `FedEvoSAC` | continuous SAC 本地学习 + federated actor aggregation + EA actor population | EA 是否能在连续异质控制中提供更稳探索和更好 actor 多样性 |
 
-论文里的 FSAC 复现为本项目的 `Paper-FSAC`：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。
+离散附线中的 `Paper-FSAC` 仍作为原 FSAC 思路的内部复现：每个 worker 本地训练 discrete SAC，critic、target critic 和温度参数留在本地；服务器根据 worker 的 performance index 选择当前最优 worker，只共享最优 actor，并用 reward/PI 诱导的 Boltzmann 权重把本地 actor 与最优 actor 混合。
 
-外部论文原代码复现作为单独的 external-original comparison 管理，不直接和同协议内部基线混名。原因是这些仓库支持的环境、依赖和训练协议不同；能在相同环境上运行的才放入外部复现图。外部复现结果不参与 FedEvoFSAC 消融图，也不和内部同协议曲线混称为同一类 baseline。
+外部论文原代码复现作为单独的 external-original comparison 管理，不直接和同协议内部基线混名。原因是这些仓库支持的环境、依赖和训练协议不同；能在相同环境上运行的才放入外部复现图。外部复现结果不参与 FedEvoSAC 消融图，也不和内部同协议曲线混称为同一类 baseline。
 
 | 外部代码 | 实际 RL 主体 | 本地路径 | 可比环境 | 使用方式 |
 |----------|--------------|----------|----------|----------|
-| FedFormer | SAC | `/home/ywj/code/FedFormer` | MetaWorld MT10，不是当前离散 Gym 环境 | related work 或单独 MetaWorld 复现，不放离散环境主图 |
-| Byzantine-Federated-RL / FedPG-BR | policy gradient | `/home/ywj/code/Byzantine-Federated-RL` | CartPole-v1、LunarLander-v2、HalfCheetah-v2 | 可作为 CartPole/LunarLander 外部原代码复现 |
+| FedFormer | SAC | `/home/ywj/code/FedFormer` | MetaWorld MT10，不是当前四个 Gym/Gymnasium 连续主环境 | related work 或单独 MetaWorld 复现，不混入主图 |
+| Byzantine-Federated-RL / FedPG-BR | policy gradient | `/home/ywj/code/Byzantine-Federated-RL` | CartPole-v1、LunarLander-v2、HalfCheetah-v2 | 可作为 CartPole/LunarLander/HalfCheetah 外部原代码复现 |
 | Federated-DRL | DQN / DDQN | `/home/ywj/code/Federated-DRL` | CartPole-v1、LunarLander-v2、Mario | 可作为 FedAvg-DQN 外部原代码复现 |
-| FederatedRL | PPO | `/home/ywj/code/FederatedRL` | CartPole-v1、若干 MuJoCo/IoT 任务 | 可作为 PPO-FedRL related work，默认不进三环境主图 |
+| FederatedRL | PPO | `/home/ywj/code/FederatedRL` | CartPole-v1、若干 MuJoCo/IoT 任务 | 可作为 PPO-FedRL related work，默认不进连续主图 |
 
 当前可严格复现的外部对照边界：
 
-- `CartPole-v1`：可跑 `Federated-DRL` 的 FedAvg-DQN/DDQN 原代码，也可跑 `Byzantine-Federated-RL` 的 FedPG-BR 原代码。
-- `LunarLander`：外部仓库多使用 `LunarLander-v2`，本项目主环境是 Gymnasium 的 `LunarLander-v3`；可做外部复现图，但图注必须说明环境版本不同。
-- `Acrobot-v1`：当前已下载外部仓库没有直接支持 Acrobot 的原代码复现，不强行改源码充当 strict reproduction。
-- `FedFormer`：原论文是 MetaWorld 连续控制 SAC，不适合直接放入当前离散 Gym 环境主图；若要比较，应另开 MetaWorld 复现实验。
+- `HalfCheetah`：`Byzantine-Federated-RL` 支持旧版 `HalfCheetah-v2`，本项目主线使用 `HalfCheetah-v5`；可做 external-original 辅助图，但不能和内部同协议主图混称。
+- `LunarLander`：外部仓库多使用 `LunarLander-v2` 或离散版本，本项目主环境是 Gymnasium 的 `LunarLanderContinuous-v3`；可做外部复现图，但图注必须说明环境版本和动作空间不同。
+- `CartPole / Acrobot / MountainCar`：保留为离散附线；外部 DQN / FedPG 代码可用于 related-work 复现，不进入连续 FedEvoSAC 主图。
+- `FedFormer`：原论文是 MetaWorld 连续控制 SAC；若要比较，应另开 MetaWorld 复现实验。
 
 ## 10. 实验脚本
 
-完整三环境套件：
+连续主线 FedEvoSAC 套件：
 
 ```bash
-./run_fedrl_heterogeneous_suite.sh
+./run_continuous_fedevosac_suite.sh
 ```
 
 该脚本默认使用更强的异质设定：
@@ -280,27 +304,45 @@ CLIENT_HETEROGENEITY_MODE=mixed
 NUM_WORKERS=4
 ```
 
-输出两类图：
+默认连续环境：
 
 ```text
-plots/fedrl_comparison_mixed   # FedEvoFSAC-full vs SAC/FSAC/DQN 横向算法对比
-plots/fedrl_ablations_mixed    # FedEvoFSAC 内部消融
+LunarLanderContinuous-v3
+BipedalWalker-v3
+HalfCheetah-v5
+Hopper-v5
 ```
 
-三种异质联邦场景：
+输出三类结果：
+
+```text
+plots/fedevosac_continuous_comparison_round   # FedEvoSAC vs continuous SAC 横向对比
+plots/fedevosac_continuous_ablations_round    # FedEvoSAC 内部消融
+plots/fedevosac_continuous_tables             # final / best return 表格
+```
+
+默认连续对照组为 `Independent-SAC`、`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median` 和 `FedEvoSAC`；这些 baseline 基于本项目已有 SAC/FSAC 复现框架迁移到 continuous SAC，共享同一环境异质性、评估、日志和 actor 聚合协议。
+
+三种异质联邦场景脚本仍可用于离散附线分析：
 
 ```bash
 ./run_fedrl_three_scenarios.sh
 ```
 
-默认只跑 `FedEvoFSAC-full`，用于比较不同异质场景的影响；如果要同时跑消融，可以覆盖：
+默认只跑离散 `FedEvoFSAC-full`，用于比较不同异质场景的影响；如果要同时跑消融，可以覆盖：
 
 ```bash
 FED_VARIANTS="full uniform_aggregation no_local_rl no_ea_injection no_heterogeneity" \
   ./run_fedrl_three_scenarios.sh
 ```
 
-只补跑 FedEvoFSAC：
+离散附线完整套件：
+
+```bash
+./run_fedrl_heterogeneous_suite.sh
+```
+
+只补跑离散 FedEvoFSAC：
 
 ```bash
 ./run_fedevofsac_for_baselines.sh
@@ -309,18 +351,10 @@ FED_VARIANTS="full uniform_aggregation no_local_rl no_ea_injection no_heterogene
 默认脚本使用 `BUDGET_PRESET=reduced`，会缩小 population / generation / evaluation 数量来控制 equal-step 预算，适合日常对比和调参。若要跑最终 full budget，可显式设置：
 
 ```bash
-BUDGET_PRESET=full ./run_fedrl_heterogeneous_suite.sh
+BUDGET_PRESET=full ./run_continuous_fedevosac_suite.sh
 ```
 
-连续主线 FedEvoSAC：
-
-```bash
-./run_continuous_fedevosac_suite.sh
-```
-
-默认连续对照组为 `Independent-SAC`、`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median` 和 `FedEvoSAC`；这些 baseline 基于本项目已有 SAC/FSAC 复现框架迁移到 continuous SAC，共享同一环境异质性、评估、日志和 actor 聚合协议。
-
-只跑 SAC / FSAC baseline：
+只跑离散 SAC / FSAC baseline：
 
 ```bash
 ./run_fsac_paper_baseline.sh
@@ -338,9 +372,9 @@ BUDGET_PRESET=full ./run_fedrl_heterogeneous_suite.sh
 
 ```bash
 python -m src.main \
-  --env CartPole-v1 \
+  --env LunarLanderContinuous-v3 \
   --mode fed_evo_rl \
-  --algorithm FSAC \
+  --algorithm SAC \
   --population-size 4 \
   --num-clients 2 \
   --max-generations 2 \
@@ -373,25 +407,27 @@ python -m src.main \
 - reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
 - reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。CartPole 只作为 sanity check；核心证据优先放在 MountainCar、Acrobot 和 LunarLander。LunarLander 结论应写成强异质下相对改善，而不是声称完全解决异质性退化。
+最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；核心证据优先放在连续 `LunarLanderContinuous-v3`、`BipedalWalker-v3`、`HalfCheetah-v5` 和 `Hopper-v5`。强异质结论应写成相对改善，而不是声称完全解决异质性退化。
 
 ## 12. 当前实现状态
 
 已完成：
 
-- 离散环境主线：`CartPole-v1`、`MountainCar-v0`、`Acrobot-v1`、`LunarLander-v3`；
-- `FSACPolicy`：discrete SAC actor、twin critics、target critics、learnable alpha；
+- 连续环境主线：`LunarLanderContinuous-v3`、`BipedalWalker-v3`、`HalfCheetah-v5`、`Hopper-v5`；
+- `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
+- continuous SAC baseline：`Independent-SAC`、`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；
 - GA actor 前缀可配置且当前固定为 `actor.`；
 - reward-aware federated actor aggregation；
 - delta clipping 与 bounded EA mutation；
 - global elite archive；
-- FedEvoFSAC 消融脚本；
-- SAC / FSAC / EvoSAC baseline 和对比绘图。
+- FedEvoSAC 连续对比和消融脚本；
+- 离散 `FedEvoFSAC`、`FSACPolicy`、DQN/SAC/FSAC 附线 baseline 保留为 sanity / preliminary。
 
 主要风险：
 
-- LunarLander 比 CartPole / Acrobot 更难，FSAC 可能需要更长训练和更细调参；
+- 连续控制环境训练方差更大，`BipedalWalker-v3`、`HalfCheetah-v5` 和 `Hopper-v5` 需要更长预算和多 seed 统计；
 - actor-only 共享更稳，但 client critic 完全本地化，早期本地更新可能噪声较大；
 - 异质 client reward scale 会影响 softmax 聚合权重，需要关注 `aggregation_entropy`；
+- MuJoCo 异质性过强时会改变最优动作尺度，EA mutation、action noise 和 SAC temperature 需要联动调参；
 - 当前 privacy 是 trajectory-private，不是 differential privacy 或 secure aggregation。
