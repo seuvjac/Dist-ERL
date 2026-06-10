@@ -21,6 +21,7 @@ PLOT_X_AXIS=${PLOT_X_AXIS:-"round"}
 PLOT_METRIC=${PLOT_METRIC:-"current"}
 CLIENT_HETEROGENEITY=${CLIENT_HETEROGENEITY:-"0.60"}
 CLIENT_HETEROGENEITY_MODE=${CLIENT_HETEROGENEITY_MODE:-"mixed"}
+BUDGET_PRESET=${BUDGET_PRESET:-"reduced"}
 
 for ENV_NAME in $ENVS; do
   read POP CLIENTS GENS STEPS <<<"$(python3 - <<PY
@@ -30,15 +31,25 @@ print(p['population_size'], p['num_workers'], p['max_generations'], p['max_episo
 PY
 )"
 
-  # Keep the first all-environment FedEvoRL pass tractable; raise overrides for final paper runs.
-  POP=${FED_POPULATION_SIZE:-$(( POP < 12 ? POP : 12 ))}
+  if [[ "$BUDGET_PRESET" == "reduced" ]]; then
+    POP=${FED_POPULATION_SIZE:-$(( POP < 12 ? POP : 12 ))}
+    GENS=${FED_MAX_GENERATIONS:-$(( GENS < 20 ? GENS : 20 ))}
+    EVAL_EPISODES=${FED_EVAL_EPISODES:-2}
+    CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-1}
+    CLIENT_UPDATES=${FED_CLIENT_UPDATES:-2}
+  else
+    POP=${FED_POPULATION_SIZE:-$POP}
+    GENS=${FED_MAX_GENERATIONS:-$GENS}
+    EVAL_EPISODES=${FED_EVAL_EPISODES:-2}
+    CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-1}
+    CLIENT_UPDATES=${FED_CLIENT_UPDATES:-2}
+  fi
   CLIENTS=${FED_NUM_CLIENTS:-4}
-  GENS=${FED_MAX_GENERATIONS:-$(( GENS < 20 ? GENS : 20 ))}
-  EVAL_EPISODES=${FED_EVAL_EPISODES:-2}
-  CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-1}
-  CLIENT_UPDATES=${FED_CLIENT_UPDATES:-2}
   ALG=${FED_ALGORITHM:-"FSAC"}
-  TARGET_STEPS=${TARGET_ENV_STEPS:-$(python3 - <<PY
+  if [[ -n "${TARGET_ENV_STEPS:-}" ]]; then
+    TARGET_STEPS="$TARGET_ENV_STEPS"
+  else
+    TARGET_STEPS=$(python3 - <<PY
 import math
 pop = int('$POP')
 clients = int('$CLIENTS')
@@ -52,16 +63,21 @@ fed_rounds = sum(1 for g in range(gens) if g % interval == 0)
 target = gens * pop * clients * steps * eval_half + fed_rounds * clients * rollouts * steps
 print(target)
 PY
-)}
-  BASELINE_ROUNDS=${BASELINE_ROUNDS:-$(python3 - <<PY
+)
+  fi
+  if [[ -n "${BASELINE_ROUNDS:-}" ]]; then
+    THIS_BASELINE_ROUNDS="$BASELINE_ROUNDS"
+  else
+    THIS_BASELINE_ROUNDS=$(python3 - <<PY
 import math
 target = int('$TARGET_STEPS')
 clients = int('$CLIENTS')
 steps = int('$STEPS')
 print(max(1, math.ceil(target / max(1, clients * steps))))
 PY
-)}
-  echo "$ENV_NAME equal-step budget: target_env_steps=$TARGET_STEPS baseline_rounds>=$BASELINE_ROUNDS"
+)
+  fi
+  echo "$ENV_NAME budget=$BUDGET_PRESET target_env_steps=$TARGET_STEPS baseline_rounds>=$THIS_BASELINE_ROUNDS"
 
   for SEED in $SEEDS; do
     for VARIANT in $FED_VARIANTS; do
@@ -121,7 +137,7 @@ PY
       python3 scripts/train_fsac_paper_baseline.py \
         --env "$ENV_NAME" \
         --seed "$SEED" \
-        --rounds "$BASELINE_ROUNDS" \
+        --rounds "$THIS_BASELINE_ROUNDS" \
         --target-env-steps "$TARGET_STEPS" \
         --num-workers "$CLIENTS" \
         --updates "$CLIENT_UPDATES" \
@@ -143,7 +159,7 @@ PY
       python3 scripts/train_fedavg_dqn_baseline.py \
         --env "$ENV_NAME" \
         --seed "$SEED" \
-        --rounds "$BASELINE_ROUNDS" \
+        --rounds "$THIS_BASELINE_ROUNDS" \
         --target-env-steps "$TARGET_STEPS" \
         --num-workers "$CLIENTS" \
         --updates "$CLIENT_UPDATES" \

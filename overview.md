@@ -282,6 +282,12 @@ FED_VARIANTS="full uniform_aggregation no_local_rl no_ea_injection no_heterogene
 ./run_fedevofsac_for_baselines.sh
 ```
 
+默认脚本使用 `BUDGET_PRESET=reduced`，会缩小 population / generation / evaluation 数量来控制 equal-step 预算，适合日常对比和调参。若要跑最终 full budget，可显式设置：
+
+```bash
+BUDGET_PRESET=full ./run_fedrl_heterogeneous_suite.sh
+```
+
 只跑 SAC / FSAC baseline：
 
 ```bash
