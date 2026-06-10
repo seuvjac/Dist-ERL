@@ -106,7 +106,7 @@ def _client_env_kwargs(env_name: str, client_id: int, heterogeneity: float, mode
 
     if env_name == 'Pendulum-v1':
         return {'g': max(4.0, 10.0 * (1.0 + 0.25 * strength))}
-    if env_name == 'LunarLander-v3':
+    if env_name in ('LunarLander-v3', 'LunarLanderContinuous-v3'):
         scale_boost = 1.8 if mode == 'mixed' else 1.0
         return {
             'gravity': float(np.clip(-10.0 * (1.0 + 0.18 * scale_boost * strength), -11.8, -6.0)),
@@ -165,6 +165,30 @@ def _apply_classic_control_heterogeneity(
             base.min_position = float(np.clip(-1.2 - 0.08 * scale_boost * strength, -1.35, -1.05))
         if hasattr(base, 'max_speed'):
             base.max_speed = 0.07 * max(0.45, 1.0 - 0.25 * scale_boost * strength)
+        return
+    if env_name in ('HalfCheetah-v5', 'Hopper-v5'):
+        scale_boost = 1.8 if mode == 'mixed' else 1.0
+        if hasattr(base, 'model'):
+            model = base.model
+            if hasattr(model, 'opt') and hasattr(model.opt, 'gravity'):
+                model.opt.gravity[2] = -9.81 * max(0.55, 1.0 + 0.20 * scale_boost * strength)
+            if hasattr(model, 'body_mass'):
+                model.body_mass[:] = model.body_mass[:] * max(0.45, 1.0 + 0.30 * scale_boost * strength)
+            if hasattr(model, 'dof_damping'):
+                model.dof_damping[:] = model.dof_damping[:] * max(0.35, 1.0 - 0.25 * scale_boost * strength)
+            if hasattr(model, 'geom_friction') and model.geom_friction.ndim == 2:
+                model.geom_friction[:, 0] = model.geom_friction[:, 0] * max(0.35, 1.0 + 0.35 * scale_boost * strength)
+        return
+    if env_name == 'BipedalWalker-v3':
+        scale_boost = 1.6 if mode == 'mixed' else 1.0
+        if hasattr(base, 'gravity'):
+            base.gravity = 10.0 * max(0.55, 1.0 + 0.25 * scale_boost * strength)
+        if hasattr(base, 'SPEED_HIP'):
+            base.SPEED_HIP = 4.0 * max(0.45, 1.0 - 0.25 * scale_boost * strength)
+        if hasattr(base, 'SPEED_KNEE'):
+            base.SPEED_KNEE = 6.0 * max(0.45, 1.0 - 0.25 * scale_boost * strength)
+        if hasattr(base, 'MOTORS_TORQUE'):
+            base.MOTORS_TORQUE = 80 * max(0.40, 1.0 - 0.35 * scale_boost * strength)
         return
     if env_name != 'CartPole-v1':
         return

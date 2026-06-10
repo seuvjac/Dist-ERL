@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-AlgorithmName = Literal['TD3', 'DDPG', 'PPO', 'FSAC']
+AlgorithmName = Literal['TD3', 'DDPG', 'PPO', 'FSAC', 'SAC']
 
 
 def build_deterministic_actor(state_dim: int, action_dim: int, hidden_dim: int = 256) -> nn.Sequential:
@@ -46,6 +46,11 @@ def build_discrete_sac_actor(state_dim: int, action_dim: int, hidden_dim: int = 
         nn.Tanh(),
         nn.Linear(hidden_dim, action_dim),
     )
+
+
+def build_continuous_sac_actor(state_dim: int, action_dim: int, hidden_dim: int = 256) -> nn.Module:
+    from src.utils.policies import GaussianActor
+    return GaussianActor(state_dim, action_dim, hidden_dim)
 
 
 def _critic_template(state_dim: int, action_dim: int, hidden_dim: int, prefix: str) -> Dict[str, np.ndarray]:
@@ -92,6 +97,10 @@ def build_model_template(
         actor = build_discrete_sac_actor(state_dim, action_dim, hidden_dim)
         for name, param in actor.state_dict().items():
             template[f'actor.{name}'] = param.cpu().numpy().astype(np.float32)
+    elif algo == 'SAC':
+        actor = build_continuous_sac_actor(state_dim, action_dim, hidden_dim)
+        for name, param in actor.state_dict().items():
+            template[f'actor.{name}'] = param.cpu().numpy().astype(np.float32)
     elif algo == 'PPO':
         actor = build_ppo_actor(state_dim, action_dim, hidden_dim, discrete=discrete)
         for name, param in actor.state_dict().items():
@@ -107,7 +116,7 @@ def build_model_template(
         template.update(_critic_template(state_dim, action_dim, hidden_dim, 'critic2'))
     elif algo == 'DDPG':
         template.update(_critic_template(state_dim, action_dim, hidden_dim, 'critic'))
-    elif algo in ('PPO', 'FSAC'):
+    elif algo in ('PPO', 'FSAC', 'SAC'):
         pass
     else:
         raise ValueError(f'build_model_template does not support algorithm={algorithm}')
@@ -148,6 +157,9 @@ def actor_deterministic_action(
         obs = obs[np.newaxis, :]
     with torch.no_grad():
         output = actor(torch.from_numpy(obs).float())
+    if algorithm.upper() == 'SAC':
+        with torch.no_grad():
+            return actor.deterministic(torch.from_numpy(obs).float()).squeeze(0).cpu().numpy()
     if algorithm.upper() in ('PPO', 'FSAC'):
         if discrete:
             return int(torch.argmax(output, dim=-1).cpu().numpy()[0])
@@ -190,6 +202,8 @@ class ActorEvaluator:
             self.actor = build_ppo_actor(state_dim, action_dim, hidden_dim, discrete=self.discrete)
         elif self.algorithm == 'FSAC':
             self.actor = build_discrete_sac_actor(state_dim, action_dim, hidden_dim)
+        elif self.algorithm == 'SAC':
+            self.actor = build_continuous_sac_actor(state_dim, action_dim, hidden_dim)
         else:
             raise ValueError(f'ActorEvaluator does not support algorithm={algorithm}')
         self.actor.eval()

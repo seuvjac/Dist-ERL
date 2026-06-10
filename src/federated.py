@@ -10,7 +10,7 @@ import torch
 import torch.optim as optim
 
 from src.utils.environment import get_env_info, make_env
-from src.utils.policies import DDPGPolicy, FSACPolicy, PPOPolicy, TD3Policy
+from src.utils.policies import DDPGPolicy, FSACPolicy, PPOPolicy, SACPolicy, TD3Policy
 from src.utils.policy_utils import ActorEvaluator, clip_action, encode_action_for_buffer
 from src.utils.replay_buffer import HybridReplayBuffer
 
@@ -157,6 +157,8 @@ class FederatedClient:
             return DDPGPolicy(self.state_dim, self.action_dim)
         if self.algorithm == 'TD3':
             return TD3Policy(self.state_dim, self.action_dim)
+        if self.algorithm == 'SAC':
+            return SACPolicy(self.state_dim, self.action_dim)
         if self.algorithm == 'FSAC':
             return FSACPolicy(self.state_dim, self.action_dim)
         if self.algorithm == 'PPO':
@@ -190,7 +192,7 @@ class FederatedClient:
     def _policy_action(self, observation: np.ndarray) -> np.ndarray:
         if self.algorithm in ('DDPG', 'TD3'):
             return self.policy.get_action(observation, exploration_noise=self.policy_exploration_noise)
-        if self.algorithm in ('PPO', 'FSAC'):
+        if self.algorithm in ('PPO', 'FSAC', 'SAC'):
             return self.policy.get_action(observation)
         return self.policy.get_action(observation)
 

@@ -40,6 +40,7 @@ from src.utils.policy_utils import build_model_template
 from src.worker import RolloutWorker
 
 FED_EVOFSAC_ENVS = ('CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3')
+FED_EVOSAC_ENVS = ('LunarLanderContinuous-v3', 'BipedalWalker-v3', 'HalfCheetah-v5', 'Hopper-v5')
 
 METRIC_FIELDS = [
     'generation', 'total_env_steps', 'eval_reward_mean', 'eval_reward_std',
@@ -102,8 +103,8 @@ def parse_args():
                         help='Global top-k EA archive for FedEvoRL')
     parser.add_argument('--elite-archive-restore-copies', type=int, default=1,
                         help='Number of archived elites pinned back after each FedEvoRL generation')
-    parser.add_argument('--algorithm', type=str, default='FSAC', choices=['FSAC', 'DDPG', 'TD3', 'PPO'],
-                        help='RL algorithm (FedEvoFSAC experiments use discrete FSAC)')
+    parser.add_argument('--algorithm', type=str, default='FSAC', choices=['FSAC', 'SAC', 'DDPG', 'TD3', 'PPO'],
+                        help='RL algorithm (discrete uses FSAC; continuous FedEvoSAC uses SAC)')
     parser.add_argument('--policy-exploration-noise', type=float, default=0.1,
                         help='Exploration noise for deterministic continuous baselines')
     parser.add_argument('--buffer-size', type=int, default=1000000, help='Replay buffer size')
@@ -239,11 +240,12 @@ def _validate_algorithm_for_env(args, env_info) -> None:
     is_discrete = hasattr(action_space, 'n')
     algo = args.algorithm.upper()
     if args.mode == FED_EVO_RL:
-        if args.env not in FED_EVOFSAC_ENVS:
-            raise ValueError(
-                f"FedEvoFSAC experiments are restricted to {', '.join(FED_EVOFSAC_ENVS)}")
-        if not is_discrete or algo != 'FSAC':
-            raise ValueError(f"{args.env} must use --algorithm FSAC for FedEvoFSAC")
+        if is_discrete:
+            if args.env not in FED_EVOFSAC_ENVS or algo != 'FSAC':
+                raise ValueError(f"{args.env} must use --algorithm FSAC for discrete FedEvoFSAC")
+        else:
+            if args.env not in FED_EVOSAC_ENVS or algo != 'SAC':
+                raise ValueError(f"{args.env} must use --algorithm SAC for continuous FedEvoSAC")
         return
     if is_discrete and algo != 'FSAC':
         raise ValueError(f"{args.env} has a discrete action space; use --algorithm FSAC")
@@ -286,8 +288,8 @@ def _apply_fed_ablation_args(args) -> None:
 
 def _run_fed_evo_rl(args, env_info, metrics_path):
     """EA-guided federated RL training loop."""
-    if args.algorithm.upper() != 'FSAC':
-        raise ValueError("FedEvoFSAC supports FSAC only")
+    if args.algorithm.upper() not in ('FSAC', 'SAC'):
+        raise ValueError("FedEvoRL supports FSAC (discrete) or SAC (continuous)")
     ga_config = {
         'mutation_prob': args.ea_mutation_prob,
         'mutation_beta_frac': args.ea_mutation_beta_frac,

@@ -105,6 +105,13 @@ FEDRL_HETEROGENEOUS_ENVS = [
     'LunarLander-v3',
 ]
 
+FEDRL_CONTINUOUS_ENVS = [
+    'LunarLanderContinuous-v3',
+    'BipedalWalker-v3',
+    'HalfCheetah-v5',
+    'Hopper-v5',
+]
+
 FEDRL_HETEROGENEITY_SCENARIOS = {
     'dynamics_mild': {
         'mode': 'env_params_only',
@@ -169,6 +176,22 @@ def env_run_preset(env_id: str) -> dict:
         'LunarLander-v3': {
             'population_size': 30, 'num_workers': 4,
             'max_generations': 100, 'max_episode_steps': 1000,
+        },
+        'LunarLanderContinuous-v3': {
+            'population_size': 24, 'num_workers': 4,
+            'max_generations': 80, 'max_episode_steps': 1000,
+        },
+        'BipedalWalker-v3': {
+            'population_size': 24, 'num_workers': 4,
+            'max_generations': 80, 'max_episode_steps': 1600,
+        },
+        'HalfCheetah-v5': {
+            'population_size': 24, 'num_workers': 4,
+            'max_generations': 80, 'max_episode_steps': 1000,
+        },
+        'Hopper-v5': {
+            'population_size': 24, 'num_workers': 4,
+            'max_generations': 80, 'max_episode_steps': 1000,
         },
     }
     return presets.get(env_id, {

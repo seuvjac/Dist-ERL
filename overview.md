@@ -22,7 +22,7 @@ LunarLander-v3
 | `Acrobot-v1` | discrete | 更强 link length / mass / center of mass 差异、available torque、joint velocity limits、integration timestep、observation/reward/action perturbation |
 | `LunarLander-v3` | discrete | 更强 gravity、wind、turbulence、observation/reward/action perturbation |
 
-因此，本项目不再把 MuJoCo / Pendulum / 连续动作环境作为当前主实验对象。CartPole 主要作为 sanity check；MountainCar、Acrobot 和 LunarLander 更适合作为探索困难和强异质性的主证据。
+离散环境现在保留为 sanity / preliminary 线路。CartPole 主要作为 sanity check；MountainCar、Acrobot 和 LunarLander 用于探索困难和强异质性的离散附线。主论文方向切换到连续 FedEvoSAC。
 
 当前在每个原始环境上定义三种异质联邦场景：
 
@@ -34,32 +34,54 @@ LunarLander-v3
 
 这样可以区分三类问题：动力学 non-IID、感知/奖励 non-IID，以及混合强异质 non-IID。
 
-## 2. 当前算法：FedEvoFSAC
+## 2. 当前主线算法：FedEvoSAC
 
-当前主方法是：
+当前主方法切换为连续控制：
 
 ```text
-FedEvoFSAC
-= Federated discrete SAC
+FedEvoSAC
+= Federated continuous SAC
 + ERL-Re2-style actor neuroevolution
 + reward-aware federated actor aggregation
 + global elite archive
 ```
 
-它对应论文 `Federated Reinforcement Learning for Sharing Experiences Between Multiple Workers` 中的 FSAC 思路，但额外加入 EA population，用演化搜索维护多个候选 actor。
+连续 SAC 是 SAC 更原生的使用场景，也更适合 EA：EA 直接扰动连续 actor 参数时行为变化更平滑，client heterogeneity 可以通过 gravity、mass、friction、motor strength、wind、terrain 等动力学差异表达。离散版 `FedEvoFSAC` 保留为 sanity / preliminary 线路。
+
+当前连续主实验环境：
+
+```text
+LunarLanderContinuous-v3
+BipedalWalker-v3
+HalfCheetah-v5
+Hopper-v5
+```
+
+连续主对照组：
+
+```text
+Independent-SAC
+FedAvg-SAC
+FedBest-SAC
+FedSoftmax-SAC-noEA
+RobustFed-SAC-Median
+FedEvoSAC
+```
+
+离散 `FedEvoFSAC` 对应论文 `Federated Reinforcement Learning for Sharing Experiences Between Multiple Workers` 中的 FSAC 思路，但额外加入 EA population，用演化搜索维护多个候选 actor。
 
 ## 3. 三类角色
 
 | 角色 | 代码位置 | 职责 |
 |------|----------|------|
 | Federated Evolution Server | `src/main.py`, `src/manager.py` | 维护 actor population，执行选择、交叉、变异、archive 和 RL 注入 |
-| Federated FSAC Client | `src/federated.py` | 持有私有环境和 replay buffer，本地训练 discrete SAC actor / critics |
+| Federated SAC Client | `src/federated.py` | 持有私有环境和 replay buffer；连续主线训练 SAC actor / critics，离散附线训练 FSAC |
 | Evaluator / Baseline Worker | `src/worker.py`, `src/learner.py` | 支撑 pure RL、pure EA、standard ERL、Dist-ERL、ERL-Re2 等对比 |
 
 主入口：
 
 ```bash
-python -m src.main --mode fed_evo_rl --algorithm FSAC --env CartPole-v1
+python -m src.main --mode fed_evo_rl --algorithm SAC --env LunarLanderContinuous-v3
 ```
 
 ## 4. 算法流程
@@ -289,6 +311,14 @@ FED_VARIANTS="full uniform_aggregation no_local_rl no_ea_injection no_heterogene
 ```bash
 BUDGET_PRESET=full ./run_fedrl_heterogeneous_suite.sh
 ```
+
+连续主线 FedEvoSAC：
+
+```bash
+./run_continuous_fedevosac_suite.sh
+```
+
+默认连续对照组为 `Independent-SAC`、`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median` 和 `FedEvoSAC`；这些 baseline 基于本项目已有 SAC/FSAC 复现框架迁移到 continuous SAC，共享同一环境异质性、评估、日志和 actor 聚合协议。
 
 只跑 SAC / FSAC baseline：
 

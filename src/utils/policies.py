@@ -45,6 +45,107 @@ def _build_q_critic(state_dim: int, action_dim: int, hidden_dim: int) -> nn.Sequ
     )
 
 
+class GaussianActor(nn.Module):
+    """Tanh-squashed Gaussian actor for continuous SAC."""
+
+    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+        )
+        self.mean = nn.Linear(hidden_dim, action_dim)
+        self.log_std = nn.Linear(hidden_dim, action_dim)
+
+    def forward(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        h = self.net(obs)
+        mean = self.mean(h)
+        log_std = torch.clamp(self.log_std(h), -5.0, 2.0)
+        return mean, log_std
+
+    def sample(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        mean, log_std = self(obs)
+        std = log_std.exp()
+        normal = torch.distributions.Normal(mean, std)
+        z = normal.rsample()
+        action = torch.tanh(z)
+        log_prob = normal.log_prob(z) - torch.log(1.0 - action.pow(2) + 1e-6)
+        return action, log_prob.sum(dim=-1, keepdim=True)
+
+    def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
+        mean, _ = self(obs)
+        return torch.tanh(mean)
+
+
+class SACPolicy(BasePolicy):
+    """Continuous Soft Actor-Critic with actor-only export for federation/EA."""
+
+    def __init__(self, state_dim: int = 111, action_dim: int = 8, hidden_dim: int = 256,
+                 init_alpha: float = 0.2, target_entropy: float = None):
+        super().__init__(state_dim, action_dim)
+        self.actor = GaussianActor(state_dim, action_dim, hidden_dim)
+        self.critic1 = _build_q_critic(state_dim, action_dim, hidden_dim)
+        self.critic2 = _build_q_critic(state_dim, action_dim, hidden_dim)
+        self.target_critic1 = _build_q_critic(state_dim, action_dim, hidden_dim)
+        self.target_critic2 = _build_q_critic(state_dim, action_dim, hidden_dim)
+        self.target_critic1.load_state_dict(self.critic1.state_dict())
+        self.target_critic2.load_state_dict(self.critic2.state_dict())
+        self.log_alpha = nn.Parameter(torch.tensor(float(np.log(init_alpha)), dtype=torch.float32))
+        self.target_entropy = float(target_entropy) if target_entropy is not None else -float(action_dim)
+
+    @property
+    def alpha(self) -> torch.Tensor:
+        return self.log_alpha.exp().clamp(1e-4, 10.0)
+
+    def reset_actor_last_layers(self) -> None:
+        linear_layers = [m for m in self.actor.modules() if isinstance(m, nn.Linear)]
+        for layer in linear_layers[-3:]:
+            nn.init.xavier_uniform_(layer.weight)
+            if layer.bias is not None:
+                nn.init.zeros_(layer.bias)
+
+    def sync_target(self, tau: float = 1.0) -> None:
+        for target, source in ((self.target_critic1, self.critic1), (self.target_critic2, self.critic2)):
+            for tp, sp in zip(target.parameters(), source.parameters()):
+                tp.data.mul_(1.0 - tau).add_(sp.data, alpha=tau)
+
+    def get_action(self, observation: np.ndarray, deterministic: bool = False) -> np.ndarray:
+        obs = np.asarray(observation, dtype=np.float32)
+        single = obs.ndim == 1
+        if single:
+            obs = obs[np.newaxis, :]
+        obs_t = torch.from_numpy(obs).float()
+        with torch.no_grad():
+            action = self.actor.deterministic(obs_t) if deterministic else self.actor.sample(obs_t)[0]
+        action_np = action.cpu().numpy()
+        return action_np[0] if single else action_np
+
+    def update(self, batch: Dict[str, np.ndarray], gamma: float, tau: float) -> torch.Tensor:
+        observations = torch.from_numpy(batch['observations']).float()
+        actions = torch.from_numpy(batch['actions']).float()
+        rewards = torch.from_numpy(batch['rewards']).float().unsqueeze(-1)
+        next_observations = torch.from_numpy(batch['next_observations']).float()
+        dones = torch.from_numpy(batch['dones']).float().unsqueeze(-1)
+
+        with torch.no_grad():
+            next_actions, next_logp = self.actor.sample(next_observations)
+            next_sa = torch.cat([next_observations, next_actions], dim=-1)
+            next_q = torch.min(self.target_critic1(next_sa), self.target_critic2(next_sa))
+            target_q = rewards + gamma * (1.0 - dones) * (next_q - self.alpha.detach() * next_logp)
+
+        sa = torch.cat([observations, actions], dim=-1)
+        critic_loss = F.smooth_l1_loss(self.critic1(sa), target_q) + F.smooth_l1_loss(self.critic2(sa), target_q)
+
+        new_actions, logp = self.actor.sample(observations)
+        new_sa = torch.cat([observations, new_actions], dim=-1)
+        min_q = torch.min(self.critic1(new_sa), self.critic2(new_sa))
+        actor_loss = (self.alpha.detach() * logp - min_q).mean()
+        alpha_loss = -(self.log_alpha * (logp + self.target_entropy).detach()).mean()
+        return critic_loss + actor_loss + alpha_loss
+
+
 def _build_discrete_q_critic(state_dim: int, action_dim: int, hidden_dim: int) -> nn.Sequential:
     return nn.Sequential(
         nn.Linear(state_dim, hidden_dim),

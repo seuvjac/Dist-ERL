@@ -32,11 +32,14 @@ def parse_args():
 def _label(meta, run_name):
     mode = meta.get('mode', run_name)
     if mode == 'fed_evo_rl':
-        return f"FedEvoFSAC-{meta.get('fed_ablation', 'n/a')}"
+        prefix = 'FedEvoSAC' if meta.get('algorithm') == 'SAC' else 'FedEvoFSAC'
+        return f"{prefix}-{meta.get('fed_ablation', 'n/a')}"
     if mode == 'paper_fsac':
         return 'Paper-FSAC'
     if mode == 'paper_sac':
         return 'Paper-SAC'
+    if mode == 'independent_sac':
+        return 'Independent-SAC'
     if mode in ('fedavg_sac', 'fedavg_fsac'):
         return 'FedAvg-SAC'
     if mode in ('fedsoftmax_sac_noea', 'fedsoftmax_fsac_noea'):

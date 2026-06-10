@@ -91,13 +91,16 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
 
             label = mode
             if mode == 'fed_evo_rl':
-                label = f"FedEvoFSAC-{fed_abl}"
+                prefix = 'FedEvoSAC' if meta.get('algorithm') == 'SAC' else 'FedEvoFSAC'
+                label = f"{prefix}-{fed_abl}"
             elif mode == 'standard_erl' and meta.get('algorithm') == 'FSAC':
                 label = 'EvoSAC-noFed'
             elif mode == 'paper_fsac':
                 label = 'Paper-FSAC'
             elif mode == 'paper_sac':
                 label = 'Paper-SAC'
+            elif mode == 'independent_sac':
+                label = 'Independent-SAC'
             elif mode in ('fedavg_sac', 'fedavg_fsac'):
                 label = 'FedAvg-SAC'
             elif mode in ('fedsoftmax_sac_noea', 'fedsoftmax_fsac_noea'):
@@ -146,12 +149,14 @@ def main():
     envs = args.envs or sorted({r['env'] for r in runs})
     colors = {
         'FedEvoFSAC-full': '#D55E00',
+        'FedEvoSAC-full': '#D55E00',
         'FedEvoFSAC-uniform_aggregation': '#0072B2',
         'FedEvoFSAC-no_local_rl': '#009E73',
         'FedEvoFSAC-no_ea_injection': '#E69F00',
         'FedEvoFSAC-no_heterogeneity': '#CC79A7',
         'Paper-FSAC': '#56B4E9',
         'Paper-SAC': '#999999',
+        'Independent-SAC': '#999999',
         'FedAvg-SAC': '#0072B2',
         'FedSoftmax-SAC-noEA': '#009E73',
         'FedBest-SAC': '#E69F00',

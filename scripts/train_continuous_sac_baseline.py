@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Train continuous SAC/FedSAC baselines for FedEvoSAC comparisons."""
+
+import argparse
+import csv
+import json
+import random
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.optim as optim
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.main import METRIC_FIELDS
+from src.utils.environment import get_env_info, make_env
+from src.utils.policies import SACPolicy
+from src.utils.policy_utils import clip_action
+from src.utils.replay_buffer import HybridReplayBuffer
+
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument('--env', default='LunarLanderContinuous-v3')
+    p.add_argument('--seed', type=int, default=0)
+    p.add_argument('--rounds', type=int, default=120)
+    p.add_argument('--target-env-steps', type=int, default=0)
+    p.add_argument('--num-workers', type=int, default=4)
+    p.add_argument('--max-episode-steps', type=int, default=1000)
+    p.add_argument('--updates', type=int, default=8)
+    p.add_argument('--batch-size', type=int, default=128)
+    p.add_argument('--buffer-size', type=int, default=200000)
+    p.add_argument('--lr', type=float, default=3e-4)
+    p.add_argument('--gamma', type=float, default=0.99)
+    p.add_argument('--tau', type=float, default=0.005)
+    p.add_argument('--client-heterogeneity', type=float, default=0.6)
+    p.add_argument('--client-heterogeneity-mode', default='mixed',
+                   choices=['none', 'reward_action_noise', 'env_params',
+                            'env_params_only', 'mixed'])
+    p.add_argument('--eval-interval', type=int, default=5)
+    p.add_argument('--eval-episodes', type=int, default=3)
+    p.add_argument('--log-dir', default='logs_sac_continuous')
+    p.add_argument('--exp-name', default=None)
+    p.add_argument('--baseline-mode', default='independent_sac',
+                   choices=['independent_sac', 'fedavg_sac', 'fedbest_sac',
+                            'fedsoftmax_sac_noea', 'fedmedian_sac'])
+    p.add_argument('--federated-temperature', type=float, default=50.0)
+    return p.parse_args()
+
+
+def _actor_state(policy):
+    return {k: v.detach().cpu().clone() for k, v in policy.actor.state_dict().items()}
+
+
+def _load_actor_state(policy, state):
+    policy.actor.load_state_dict({k: v.clone() for k, v in state.items()})
+
+
+def _average_actor_states(states, weights):
+    out = {}
+    for key in states[0]:
+        acc = torch.zeros_like(states[0][key], dtype=torch.float32)
+        for state, weight in zip(states, weights):
+            acc += state[key].float() * float(weight)
+        out[key] = acc.to(states[0][key].dtype)
+    return out
+
+
+def _median_actor_state(states):
+    out = {}
+    for key in states[0]:
+        out[key] = torch.stack([s[key].float() for s in states], dim=0).median(dim=0).values
+    return out
+
+
+def _sync_policies(policies, scores, mode, temperature):
+    if mode == 'independent_sac':
+        return 0.0
+    states = [_actor_state(p) for p in policies]
+    scores = np.asarray(scores, dtype=np.float64)
+    if mode == 'fedbest_sac':
+        best = states[int(np.argmax(scores))]
+        for p in policies:
+            _load_actor_state(p, best)
+        return 0.0
+    if mode == 'fedmedian_sac':
+        global_state = _median_actor_state(states)
+        for p in policies:
+            _load_actor_state(p, global_state)
+        return 0.0
+    if mode == 'fedsoftmax_sac_noea':
+        logits = (scores - scores.max()) / max(1e-6, float(temperature))
+        weights = np.exp(np.clip(logits, -60.0, 0.0))
+        weights = weights / max(1e-8, weights.sum())
+    else:
+        weights = np.ones(len(states), dtype=np.float64) / len(states)
+    global_state = _average_actor_states(states, weights)
+    for p in policies:
+        _load_actor_state(p, global_state)
+    weights = np.clip(weights, 1e-12, 1.0)
+    return float(-(weights * np.log(weights)).sum())
+
+
+def _rollout(policy, env_name, max_steps, seed, client_id, heterogeneity, heterogeneity_mode, train=True):
+    env = make_env(env_name, max_episode_steps=max_steps, client_id=client_id,
+                   heterogeneity=heterogeneity, heterogeneity_mode=heterogeneity_mode)
+    obs, _ = env.reset(seed=seed)
+    transitions = []
+    total = 0.0
+    for _ in range(max_steps):
+        action = clip_action(policy.get_action(obs, deterministic=not train), env.action_space)
+        next_obs, reward, terminated, truncated, _ = env.step(action)
+        transitions.append((obs, action, float(reward), next_obs, terminated or truncated))
+        total += float(reward)
+        obs = next_obs
+        if terminated or truncated:
+            break
+    env.close()
+    return total, transitions, len(transitions)
+
+
+def _evaluate(policies, env_name, max_steps, seed, episodes):
+    rewards = []
+    for wid, policy in enumerate(policies):
+        for ep in range(episodes):
+            reward, _, _ = _rollout(policy, env_name, max_steps, seed + wid * 1000 + ep,
+                                    wid, 0.0, 'none', train=False)
+            rewards.append(reward)
+    return float(np.mean(rewards)), float(np.std(rewards))
+
+
+def _write_row(path, row):
+    full = {k: '' for k in METRIC_FIELDS}
+    full.update(row)
+    with path.open('a', newline='', encoding='utf-8') as f:
+        csv.DictWriter(f, fieldnames=METRIC_FIELDS).writerow(full)
+
+
+def main():
+    args = parse_args()
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    info = get_env_info(args.env)
+    policies = [SACPolicy(info['state_dim'], info['action_dim']) for _ in range(args.num_workers)]
+    optimizers = [optim.Adam(p.parameters(), lr=args.lr) for p in policies]
+    buffers = [HybridReplayBuffer(args.buffer_size) for _ in range(args.num_workers)]
+
+    exp = args.exp_name or f"{args.baseline_mode}_{args.env}_s{args.seed}"
+    run_dir = Path(args.log_dir) / exp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = run_dir / 'metrics.csv'
+    metadata = vars(args).copy()
+    metadata.update({'mode': args.baseline_mode, 'algorithm': 'SAC', 'env': args.env, 'seed': args.seed})
+    (run_dir / 'metadata.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
+    with metrics_path.open('w', newline='', encoding='utf-8') as f:
+        csv.DictWriter(f, fieldnames=METRIC_FIELDS).writeheader()
+
+    start = time.time()
+    total_steps = 0
+    total_updates = 0
+    best_eval = -np.inf
+    scores = np.zeros(args.num_workers, dtype=np.float64)
+    round_idx = 0
+    while round_idx < args.rounds or (args.target_env_steps > 0 and total_steps < args.target_env_steps):
+        round_start = time.time()
+        worker_rewards = []
+        for wid, policy in enumerate(policies):
+            reward, transitions, steps = _rollout(
+                policy, args.env, args.max_episode_steps, args.seed + round_idx * 10000 + wid,
+                wid, args.client_heterogeneity, args.client_heterogeneity_mode, train=True)
+            worker_rewards.append(reward)
+            scores[wid] = 0.9 * scores[wid] + reward
+            total_steps += steps
+            for item in transitions:
+                buffers[wid].add_rl_data(*item)
+            if len(buffers[wid]) >= args.batch_size:
+                for _ in range(args.updates):
+                    batch = buffers[wid].sample(args.batch_size, ea_batch_ratio=0.0)
+                    for key in ('observations', 'actions', 'rewards', 'next_observations', 'dones'):
+                        batch[key] = np.asarray(batch[key], dtype=np.float32)
+                    loss = policy.update(batch, args.gamma, args.tau)
+                    if not torch.isfinite(loss):
+                        continue
+                    optimizers[wid].zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(policy.parameters(), 10.0)
+                    optimizers[wid].step()
+                    policy.sync_target(args.tau)
+                    total_updates += 1
+        entropy = _sync_policies(policies, scores, args.baseline_mode, args.federated_temperature)
+        if round_idx % args.eval_interval == 0 or round_idx == args.rounds - 1:
+            eval_mean, eval_std = _evaluate(policies, args.env, args.max_episode_steps, args.seed, args.eval_episodes)
+            best_eval = max(best_eval, eval_mean)
+            _write_row(metrics_path, {
+                'generation': round_idx,
+                'total_env_steps': total_steps,
+                'eval_reward_mean': eval_mean,
+                'eval_reward_std': eval_std,
+                'best_fitness': best_eval,
+                'mean_fitness': float(np.mean(worker_rewards)),
+                'rl_steps': total_updates,
+                'buffer_size': int(sum(len(b) for b in buffers)),
+                'gen_time': time.time() - round_start,
+                'total_time': time.time() - start,
+                'sync_applied': int(args.baseline_mode != 'independent_sac'),
+                'fitness_std': float(np.std(worker_rewards)),
+                'selected_clients': args.num_workers,
+                'fed_round_applied': int(args.baseline_mode != 'independent_sac'),
+                'archive_best': best_eval,
+                'aggregation_entropy': entropy,
+                'client_reward_mean': float(np.mean(worker_rewards)),
+                'client_reward_std': float(np.std(worker_rewards)),
+            })
+            print(f"{exp}: round={round_idx} steps={total_steps} eval={eval_mean:.2f}+/-{eval_std:.2f}", flush=True)
+        round_idx += 1
+    print(metrics_path)
+
+
+if __name__ == '__main__':
+    main()

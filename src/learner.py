@@ -8,7 +8,7 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from .utils.environment import get_env_info, make_env
 from .utils.replay_buffer import HybridReplayBuffer
-from .utils.policies import DDPGPolicy, FSACPolicy, TD3Policy, PPOPolicy
+from .utils.policies import DDPGPolicy, FSACPolicy, SACPolicy, TD3Policy, PPOPolicy
 from .utils.policy_utils import ActorEvaluator, encode_action_for_buffer
 
 _GENOTYPE_PREFIXES = ('actor.',)
@@ -59,6 +59,8 @@ class RLLearner:
             return DDPGPolicy(state_dim=self.state_dim, action_dim=self.action_dim)
         if self.algorithm == "TD3":
             return TD3Policy(state_dim=self.state_dim, action_dim=self.action_dim)
+        if self.algorithm == "SAC":
+            return SACPolicy(state_dim=self.state_dim, action_dim=self.action_dim)
         if self.algorithm == "FSAC":
             return FSACPolicy(state_dim=self.state_dim, action_dim=self.action_dim)
         if self.algorithm == "PPO":
@@ -196,7 +198,7 @@ class RLLearner:
     def _policy_get_action(self, obs: np.ndarray) -> np.ndarray:
         if self.algorithm in ('TD3', 'DDPG'):
             return self.policy.get_action(obs, exploration_noise=self.policy_exploration_noise)
-        if self.algorithm in ('PPO', 'FSAC'):
+        if self.algorithm in ('PPO', 'FSAC', 'SAC'):
             return self.policy.get_action(obs)
         return self.policy.get_action(obs)
 
