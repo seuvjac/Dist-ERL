@@ -310,8 +310,8 @@ def _write_row(path: Path, row: dict) -> None:
 
 def main():
     args = parse_args()
-    if args.env not in ('CartPole-v1', 'Acrobot-v1', 'LunarLander-v3'):
-        raise SystemExit('paper FSAC baseline is configured for the three discrete envs only')
+    if args.env not in ('CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3'):
+        raise SystemExit('paper FSAC baseline is configured for the supported discrete FedRL envs only')
 
     random.seed(args.seed)
     np.random.seed(args.seed)

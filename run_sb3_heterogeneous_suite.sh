@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 
-ENVS=${ENVS:-"CartPole-v1 Acrobot-v1 LunarLander-v3"}
+ENVS=${ENVS:-"CartPole-v1 MountainCar-v0 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0 1 2"}
 SB3_ALGOS=${SB3_ALGOS:-"PPO"}
 SB3_LOG_DIR=${SB3_LOG_DIR:-"logs_sb3"}

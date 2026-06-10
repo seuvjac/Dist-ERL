@@ -25,7 +25,7 @@ def parse_args():
     p.add_argument('--dqn-log-dir', default='logs_dqn_fedrl_mixed')
     p.add_argument('--out-dir', default='plots/fedrl_tables_mixed')
     p.add_argument('--plot-kind', default='comparison', choices=['comparison', 'ablation', 'all'])
-    p.add_argument('--envs', nargs='*', default=['CartPole-v1', 'Acrobot-v1', 'LunarLander-v3'])
+    p.add_argument('--envs', nargs='*', default=['CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3'])
     return p.parse_args()
 
 

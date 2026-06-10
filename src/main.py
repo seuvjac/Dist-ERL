@@ -39,7 +39,7 @@ from src.utils.environment import apply_headless_mujoco_runtime, get_env_info
 from src.utils.policy_utils import build_model_template
 from src.worker import RolloutWorker
 
-FED_EVOFSAC_ENVS = ('CartPole-v1', 'Acrobot-v1', 'LunarLander-v3')
+FED_EVOFSAC_ENVS = ('CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3')
 
 METRIC_FIELDS = [
     'generation', 'total_env_steps', 'eval_reward_mean', 'eval_reward_std',

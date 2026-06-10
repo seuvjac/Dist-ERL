@@ -100,6 +100,7 @@ MUJOCO_V2_ENVS = [
 
 FEDRL_HETEROGENEOUS_ENVS = [
     'CartPole-v1',
+    'MountainCar-v0',
     'Acrobot-v1',
     'LunarLander-v3',
 ]
@@ -157,6 +158,10 @@ def env_run_preset(env_id: str) -> dict:
             'population_size': 24, 'num_workers': 2,
             'max_generations': 80, 'max_episode_steps': 500,
         },
+        'MountainCar-v0': {
+            'population_size': 24, 'num_workers': 2,
+            'max_generations': 80, 'max_episode_steps': 200,
+        },
         'Acrobot-v1': {
             'population_size': 24, 'num_workers': 2,
             'max_generations': 80, 'max_episode_steps': 500,
@@ -191,6 +196,7 @@ BENCHMARK_ENVS = [
     _bench_entry('Walker2d-v2', 'Walker2d', 'MuJoCo v2 (main)'),
     _bench_entry('Humanoid-v2', 'Humanoid', 'MuJoCo v2 (main)'),
     _bench_entry('CartPole-v1', 'CartPole', 'FedRL heterogeneity sanity check'),
+    _bench_entry('MountainCar-v0', 'MountainCar', 'FedRL exploration under heterogeneous hill dynamics'),
     _bench_entry('Acrobot-v1', 'Acrobot', 'FedRL heterogeneity sanity check'),
     _bench_entry('LunarLander-v3', 'LunarLanderDiscrete', 'FedRL heterogeneous Box2D'),
 ]

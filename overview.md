@@ -2,10 +2,11 @@
 
 ## 1. Federated RL 问题设定
 
-本项目当前主线只研究三个离散动作控制环境：
+本项目当前主线研究离散动作控制环境：
 
 ```text
 CartPole-v1
+MountainCar-v0
 Acrobot-v1
 LunarLander-v3
 ```
@@ -17,10 +18,11 @@ LunarLander-v3
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
 | `CartPole-v1` | discrete | gravity、cart mass、pole mass、pole length、force magnitude、integration timestep、observation/reward/action perturbation |
+| `MountainCar-v0` | discrete | engine force、gravity、goal position、minimum position、max speed、observation/reward/action perturbation |
 | `Acrobot-v1` | discrete | 更强 link length / mass / center of mass 差异、available torque、joint velocity limits、integration timestep、observation/reward/action perturbation |
 | `LunarLander-v3` | discrete | 更强 gravity、wind、turbulence、observation/reward/action perturbation |
 
-因此，本项目不再把 MuJoCo / Pendulum / 连续动作环境作为当前主实验对象。
+因此，本项目不再把 MuJoCo / Pendulum / 连续动作环境作为当前主实验对象。CartPole 主要作为 sanity check；MountainCar、Acrobot 和 LunarLander 更适合作为探索困难和强异质性的主证据。
 
 当前在每个原始环境上定义三种异质联邦场景：
 
@@ -178,7 +180,7 @@ theta_fed = theta_best + sum_i w_i * delta_i
 
 ## 9. Baseline 和对比曲线
 
-主实验只比较三个离散环境。
+主实验只比较离散环境。
 
 FedEvoFSAC 家族内部消融：
 
@@ -228,7 +230,7 @@ FedAvg-DQN
 
 | 外部代码 | 实际 RL 主体 | 本地路径 | 可比环境 | 使用方式 |
 |----------|--------------|----------|----------|----------|
-| FedFormer | SAC | `/home/ywj/code/FedFormer` | MetaWorld MT10，不是 CartPole/Acrobot/LunarLander | related work 或单独 MetaWorld 复现，不放三环境主图 |
+| FedFormer | SAC | `/home/ywj/code/FedFormer` | MetaWorld MT10，不是当前离散 Gym 环境 | related work 或单独 MetaWorld 复现，不放离散环境主图 |
 | Byzantine-Federated-RL / FedPG-BR | policy gradient | `/home/ywj/code/Byzantine-Federated-RL` | CartPole-v1、LunarLander-v2、HalfCheetah-v2 | 可作为 CartPole/LunarLander 外部原代码复现 |
 | Federated-DRL | DQN / DDQN | `/home/ywj/code/Federated-DRL` | CartPole-v1、LunarLander-v2、Mario | 可作为 FedAvg-DQN 外部原代码复现 |
 | FederatedRL | PPO | `/home/ywj/code/FederatedRL` | CartPole-v1、若干 MuJoCo/IoT 任务 | 可作为 PPO-FedRL related work，默认不进三环境主图 |
@@ -238,7 +240,7 @@ FedAvg-DQN
 - `CartPole-v1`：可跑 `Federated-DRL` 的 FedAvg-DQN/DDQN 原代码，也可跑 `Byzantine-Federated-RL` 的 FedPG-BR 原代码。
 - `LunarLander`：外部仓库多使用 `LunarLander-v2`，本项目主环境是 Gymnasium 的 `LunarLander-v3`；可做外部复现图，但图注必须说明环境版本不同。
 - `Acrobot-v1`：当前已下载外部仓库没有直接支持 Acrobot 的原代码复现，不强行改源码充当 strict reproduction。
-- `FedFormer`：原论文是 MetaWorld 连续控制 SAC，不适合直接放入 CartPole/Acrobot/LunarLander 三环境主图；若要比较，应另开 MetaWorld 复现实验。
+- `FedFormer`：原论文是 MetaWorld 连续控制 SAC，不适合直接放入当前离散 Gym 环境主图；若要比较，应另开 MetaWorld 复现实验。
 
 ## 10. 实验脚本
 
@@ -341,13 +343,13 @@ python -m src.main \
 - reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
 - reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。CartPole 只作为 sanity check；核心证据优先放在 Acrobot 和 LunarLander。LunarLander 结论应写成强异质下相对改善，而不是声称完全解决异质性退化。
+最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。CartPole 只作为 sanity check；核心证据优先放在 MountainCar、Acrobot 和 LunarLander。LunarLander 结论应写成强异质下相对改善，而不是声称完全解决异质性退化。
 
 ## 12. 当前实现状态
 
 已完成：
 
-- 三个离散环境主线：`CartPole-v1`、`Acrobot-v1`、`LunarLander-v3`；
+- 离散环境主线：`CartPole-v1`、`MountainCar-v0`、`Acrobot-v1`、`LunarLander-v3`；
 - `FSACPolicy`：discrete SAC actor、twin critics、target critics、learnable alpha；
 - EA genotype actor-only；
 - GA actor 前缀可配置且当前固定为 `actor.`；
