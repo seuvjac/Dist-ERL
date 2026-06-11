@@ -54,6 +54,7 @@ METRIC_FIELDS = [
     'client_reward_mean', 'client_reward_std', 'client_fitness_mean',
     'client_fitness_std', 'selected_clients', 'aggregation_entropy',
     'fed_round_applied', 'archive_best', 'archive_size',
+    'deployable_eval_mean', 'deployable_eval_std',
     'aggregation_temperature',
 ]
 
@@ -418,15 +419,19 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             client_reward_mean = last_client_reward_mean
             client_reward_std = last_client_reward_std
         client_fitness_values = [r['fitness'] for r in eval_results]
-        eval_reward_history.append(client_reward_mean)
+        deployable_eval_mean = float(stats.get('archive_best', stats.get('max_fitness', 0.0)))
+        deployable_eval_std = 0.0
+        eval_reward_history.append(deployable_eval_mean)
         total_env_steps_history.append(total_env_steps)
         rl_steps_history.append(int(sum(r.get('training_steps', 0) for r in train_results)))
 
         log_data = {
             'generation': generation,
             'total_env_steps': total_env_steps,
-            'eval_reward_mean': client_reward_mean,
-            'eval_reward_std': client_reward_std,
+            # For FedEvoSAC, the deployable policy is the global elite/archive actor.
+            # Local RL rollout scores remain in client_reward_mean/std.
+            'eval_reward_mean': deployable_eval_mean,
+            'eval_reward_std': deployable_eval_std,
             'eval_ea_mean': stats['max_fitness'],
             'best_fitness': stats['max_fitness'],
             'mean_fitness': stats['mean_fitness'],
@@ -454,11 +459,14 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             'fed_round_applied': fed_round_applied,
             'archive_best': stats.get('archive_best', 0.0),
             'archive_size': stats.get('archive_size', 0),
+            'deployable_eval_mean': deployable_eval_mean,
+            'deployable_eval_std': deployable_eval_std,
             'aggregation_temperature': args.fed_aggregation_temperature,
         }
         _append_local_metrics(metrics_path, log_data)
         _log(
-            f"Gen {generation}: fed_reward={client_reward_mean:.2f} +/- {client_reward_std:.2f}, "
+            f"Gen {generation}: deploy={deployable_eval_mean:.2f}, "
+            f"fed_rollout={client_reward_mean:.2f} +/- {client_reward_std:.2f}, "
             f"ea_best={stats['max_fitness']:.2f}, diversity={stats.get('weight_diversity', 0.0):.3f}, "
             f"clients={selected_count}/{args.num_clients}, agg={args.fed_aggregation}"
         )
