@@ -41,6 +41,7 @@ PY
     CLIENT_UPDATES=${FED_CLIENT_UPDATES:-8}
   fi
   CLIENTS=${FED_NUM_CLIENTS:-4}
+  WORKERS=${FED_NUM_WORKERS:-$CLIENTS}
   TARGET_STEPS=${TARGET_ENV_STEPS:-$(python3 - <<PY
 pop=int('$POP'); clients=int('$CLIENTS'); gens=int('$GENS'); steps=int('$STEPS')
 eval_episodes=int('$EVAL_EPISODES'); rollouts=int('$CLIENT_ROLLOUTS')
@@ -70,6 +71,7 @@ PY
         --fed-ablation "$VARIANT" \
         --algorithm SAC \
         --population-size "$POP" \
+        --num-workers "$WORKERS" \
         --num-clients "$CLIENTS" \
         --max-generations "$GENS" \
         --target-env-steps "$TARGET_STEPS" \
