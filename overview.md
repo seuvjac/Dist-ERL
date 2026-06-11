@@ -80,26 +80,48 @@ python -m src.main --mode fed_evo_rl --algorithm SAC --env LunarLanderContinuous
 
 每一轮 generation 中执行：
 
-1. **跨 client 私有评估**
-   - server 下发 EA population 中的 actor 参数；
-   - 每个 client 在自己的异质 MDP 中评估 actor；
-   - client 只返回 scalar fitness，不上传 trajectory。
+1. **EA population 跨 client 评估**
+   - server 维护一组 actor population，每个个体只包含 `actor.*`；
+   - server 将每个 actor 下发给所有 federated clients；
+   - 每个 client 在自己的本地 MDP 中 rollout 评估该 actor；
+   - client 只返回 scalar fitness，不上传 trajectory；
+   - server 对同一 actor 的多 client fitness 求均值，得到该个体的 federated fitness。
 
-2. **服务器端演化**
-   - server 按跨 client 平均 fitness 排序；
-   - 执行 elitism、tournament selection、row-wise crossover、bounded mutation；
-   - 维护 global elite archive，防止历史最优 actor 被后续扰动覆盖。
+2. **Global elite archive 更新**
+   - server 按 federated fitness 对 population 排序；
+   - 将当前高分 actor 与历史 archive 合并；
+   - 保留 top-k actor 作为 global elite archive；
+   - archive actor 是当前可部署策略候选，防止历史好策略被后续 mutation 或 RL migration 覆盖。
 
-3. **本地 SAC 更新**
-   - 每隔 `K` 代，server 将当前 best actor 下发给部分 clients；
-   - client 用该 actor rollout，transition 写入私有 replay buffer；
+3. **EA selection / crossover / mutation**
+   - 执行 elitism，保留高 fitness actor；
+   - 用 tournament selection 选择 parent / winner actor；
+   - 对 actor 的二维权重矩阵做 row-wise crossover；
+   - 对 non-elite actor 执行 bounded mutation、super mutation 和 reset mutation；
+   - EA 只作用于 `actor.*`，不进化 critic、target critic、temperature 或 replay buffer。
+
+4. **Elite restore**
+   - GA 结束后，将 global elite archive 中的 top actor hard restore 回 population 前部；
+   - 这样 archive elite 会继续参与下一代评估，也能作为本轮 SAC 本地更新的 warm-start actor。
+
+5. **本地 SAC refinement**
+   - 每隔 `K` 代，server 将当前 best / archive elite actor 下发给部分 clients；
+   - client 用该 actor 初始化本地 SAC actor；
+   - client rollout 产生 transition，写入私有 replay buffer；
    - client 本地训练 continuous SAC actor、critic1、critic2 和 temperature；
-   - 上传更新后的 actor 参数和本地 reward 摘要。
+   - critic、target critic、temperature 和 replay buffer 始终留在本地；
+   - client 只上传更新后的 actor 参数和本地 reward 摘要。
 
-4. **联邦 actor 聚合**
-   - server 对 client actor update 做 reward-aware aggregation；
+6. **联邦 actor 聚合**
+   - server 对 client 上传的 actor update 做 reward-aware aggregation；
    - 默认使用 softmax 权重、低分 client 过滤和 delta norm clipping；
-   - 聚合 actor 通过 soft injection 注入 EA population 的弱 non-elite 个体。
+   - 聚合时以当前 best actor 为中心聚合 delta，避免直接平均完整 actor 造成大幅漂移。
+
+7. **RL-to-EA soft injection 和 deployable policy**
+   - 若聚合 actor 的本地表现达到门控条件，server 将其 soft inject 到 EA population 的弱 non-elite 个体；
+   - injection 后再次 restore archive elite，防止历史最优 actor 被覆盖；
+   - `eval_reward_mean` 记录 global elite archive 中 best actor 的 deployable evaluation；
+   - `client_reward_mean` / `client_reward_std` 单独记录本地 SAC rollout 表现。
 
 ## 5. Continuous SAC
 
