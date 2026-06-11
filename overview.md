@@ -5,10 +5,9 @@
 本项目当前主线研究连续动作异质控制环境：
 
 ```text
+MountainCarContinuous-v0
 LunarLanderContinuous-v3
-BipedalWalker-v3
 HalfCheetah-v5
-Hopper-v5
 ```
 
 每个 client 拥有自己的私有环境、私有 replay buffer 和本地 SAC learner。client 之间不共享 trajectory，服务器只能接收 actor 参数、reward / fitness 等标量统计信息；critic、target critic、temperature 和 replay buffer 全部留在本地。
@@ -17,10 +16,9 @@ Hopper-v5
 
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
+| `MountainCarContinuous-v0` | continuous | power、gravity、goal position、observation/reward/action perturbation |
 | `LunarLanderContinuous-v3` | continuous | gravity、wind、turbulence、observation/reward/action perturbation |
-| `BipedalWalker-v3` | continuous | gravity、motor strength、hip/knee speed、observation/reward/action perturbation |
 | `HalfCheetah-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
-| `Hopper-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 
 当前在每个原始环境上定义三种异质联邦场景：
 
@@ -28,7 +26,7 @@ Hopper-v5
 |------|-----------------------------|------|------|
 | `dynamics_mild` | `env_params_only` | `0.25` | 只改变客户端物理参数，如 gravity、mass、length、wind |
 | `sensor_reward` | `reward_action_noise` | `0.35` | 原始动力学不变，只改变观测噪声、reward scale/bias 和 seed stream |
-| `mixed_hard` | `mixed` | `0.50`-`0.60` | 同时改变动力学参数与观测/奖励/动作扰动，作为最难异质场景；LunarLanderContinuous、BipedalWalker、HalfCheetah 和 Hopper 默认使用该版本 |
+| `mixed_hard` | `mixed` | `0.50`-`0.60` | 同时改变动力学参数与观测/奖励/动作扰动，作为最难异质场景；主实验先使用 no-heterogeneity / mild dynamics，hard mixed 作为压力测试 |
 
 这样可以区分三类问题：动力学 non-IID、感知/奖励 non-IID，以及混合强异质 non-IID。
 
@@ -49,10 +47,9 @@ FedEvoSAC
 当前连续主实验环境：
 
 ```text
+MountainCarContinuous-v0
 LunarLanderContinuous-v3
-BipedalWalker-v3
 HalfCheetah-v5
-Hopper-v5
 ```
 
 连续主对照组：
@@ -282,10 +279,9 @@ NUM_WORKERS=4
 默认连续环境：
 
 ```text
+MountainCarContinuous-v0
 LunarLanderContinuous-v3
-BipedalWalker-v3
 HalfCheetah-v5
-Hopper-v5
 ```
 
 输出三类结果：
@@ -382,13 +378,13 @@ python -m src.main \
 - reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
 - reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；核心证据优先放在连续 `LunarLanderContinuous-v3`、`BipedalWalker-v3`、`HalfCheetah-v5` 和 `Hopper-v5`。强异质结论应写成相对改善，而不是声称完全解决异质性退化。
+最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；核心证据优先放在连续 `MountainCarContinuous-v0`、`LunarLanderContinuous-v3` 和 `HalfCheetah-v5`。强异质结论应写成相对改善，而不是声称完全解决异质性退化。
 
 ## 12. 当前实现状态
 
 已完成：
 
-- 连续环境主线：`LunarLanderContinuous-v3`、`BipedalWalker-v3`、`HalfCheetah-v5`、`Hopper-v5`；
+- 连续环境主线：`MountainCarContinuous-v0`、`LunarLanderContinuous-v3`、`HalfCheetah-v5`；
 - `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；
@@ -401,7 +397,7 @@ python -m src.main \
 
 主要风险：
 
-- 连续控制环境训练方差更大，`BipedalWalker-v3`、`HalfCheetah-v5` 和 `Hopper-v5` 需要更长预算和多 seed 统计；
+- 连续控制环境训练方差更大，`HalfCheetah-v5` 需要更长预算和多 seed 统计；
 - actor-only 共享更稳，但 client critic 完全本地化，早期本地更新可能噪声较大；
 - 异质 client reward scale 会影响 softmax 聚合权重，需要关注 `aggregation_entropy`；
 - MuJoCo 异质性过强时会改变最优动作尺度，EA mutation、action noise 和 SAC temperature 需要联动调参；

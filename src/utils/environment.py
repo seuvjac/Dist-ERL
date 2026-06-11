@@ -153,10 +153,12 @@ def _apply_classic_control_heterogeneity(
         if hasattr(base, 'dt'):
             base.dt = 0.2 * max(0.35, 1.0 + 0.25 * scale_boost * strength)
         return
-    if env_name == 'MountainCar-v0':
+    if env_name in ('MountainCar-v0', 'MountainCarContinuous-v0'):
         scale_boost = 3.0 if mode == 'mixed' else 1.0
         if hasattr(base, 'force'):
             base.force = 0.001 * max(0.25, 1.0 - 0.45 * scale_boost * strength)
+        if hasattr(base, 'power'):
+            base.power = 0.0015 * max(0.25, 1.0 - 0.45 * scale_boost * strength)
         if hasattr(base, 'gravity'):
             base.gravity = 0.0025 * max(0.35, 1.0 + 0.40 * scale_boost * strength)
         if hasattr(base, 'goal_position'):
