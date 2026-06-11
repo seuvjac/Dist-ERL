@@ -379,7 +379,7 @@ python -m src.main \
 | `comm_upload_bytes` | 实际上传 actor 参数量估计 |
 | `comm_full_traj_bytes` | 假设上传完整 trajectory 的通信量估计 |
 
-主曲线默认使用 `eval_reward_mean`，即当前策略评估回报；`best_fitness` / `archive_best` 只作为辅助表格或附图指标，避免把历史最优和当前性能混在同一主图里。FedRL 主文建议优先使用 communication rounds 作为横坐标，因为它直接对应联邦通信效率；raw environment steps 和 normalized progress 作为补充视角：
+主曲线默认使用 `eval_reward_mean`。对 `FedEvoSAC` 来说，当前可部署策略定义为 global elite archive 中的 best actor，因此 `eval_reward_mean` 记录 deployable archive policy 的评估回报；本地 SAC rollout 分数单独保存在 `client_reward_mean` / `client_reward_std`。这样可以避免 EA 已经找到高质量 actor，但主图却只画联邦本地训练 rollout 的问题。`best_fitness` / `archive_best` 仍作为辅助表格或附图指标，用于解释 EA 搜索过程。FedRL 主文建议优先使用 communication rounds 作为横坐标，因为它直接对应联邦通信效率；raw environment steps 和 normalized progress 作为补充视角：
 
 - reward vs communication round / generation：主图，说明联邦通信效率。
 - reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
