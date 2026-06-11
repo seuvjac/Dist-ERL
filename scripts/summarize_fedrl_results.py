@@ -65,6 +65,8 @@ def _include(meta, plot_kind):
     if str(mode).startswith('sb3_'):
         return False
     if plot_kind == 'comparison':
+        if mode == 'independent_sac':
+            return False
         if mode == 'fed_evo_rl' and fed_abl != 'full':
             return False
         if mode == 'standard_erl' and meta.get('algorithm') == 'FSAC':

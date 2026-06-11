@@ -58,7 +58,6 @@ Hopper-v5
 连续主对照组：
 
 ```text
-Independent-SAC
 FedAvg-SAC
 FedBest-SAC
 FedSoftmax-SAC-noEA
@@ -201,7 +200,6 @@ theta_fed = theta_best + sum_i w_i * delta_i
 连续主实验只比较 continuous SAC 系方法：
 
 ```text
-Independent-SAC
 FedAvg-SAC
 FedBest-SAC
 FedSoftmax-SAC-noEA
@@ -235,7 +233,7 @@ FedAvg-DQN
 
 离散附线只用于 sanity / preliminary，不作为主论文核心证据。`FSACPolicy` 是 discrete SAC：actor 输出离散动作 logits，critic 输出每个动作的 Q 值，temperature target entropy 取 `0.98 * log(|A|)`。离散 `FedEvoFSAC` 对应论文 `Federated Reinforcement Learning for Sharing Experiences Between Multiple Workers` 中的 FSAC 思路，但额外加入 EA population；这条线和连续 `FedEvoSAC` 主实验分开报告。
 
-说明：连续主图不再放入 SB3、DQN、离散 FSAC 或 `EvoSAC-noFed`。主算法为 `FedEvoSAC`；横向对照只保留同协议 continuous SAC 系联邦方法。FedEvoSAC 的模块消融单独出图，不和其他算法混在同一张横向对比图里。
+说明：连续主图不再放入 SB3、DQN、离散 FSAC、`EvoSAC-noFed` 或 `Independent-SAC`。`Independent-SAC` 没有联邦通信，只作为可选诊断曲线，不进入主横向对比。主算法为 `FedEvoSAC`；横向对照只保留同协议 continuous SAC 系联邦方法。FedEvoSAC 的模块消融单独出图，不和其他算法混在同一张横向对比图里。
 
 这里的 `FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median` 是**同协议内部基线**：它们统一使用本项目的连续环境、异质 client 设置、日志格式和评估协议，用来拆解聚合规则本身的影响。它们不是外部论文的严格原代码复现，不能在论文图注里写成 external baseline。若需要和论文方法比较，必须使用外部仓库的原代码单独跑 external-original comparison。
 
@@ -243,7 +241,6 @@ FedAvg-DQN
 
 | 曲线 | 含义 | 主要回答的问题 |
 |------|------|----------------|
-| `Independent-SAC` | 多 worker 本地 continuous SAC，不共享 actor | 没有联邦共享时 SAC 的表现 |
 | `FedAvg-SAC` | client actor 做均匀平均，critic 保持本地 | 普通 FedAvg actor 聚合是否足够 |
 | `FedSoftmax-SAC-noEA` | client actor 按 performance index softmax 加权聚合，无 EA | reward-aware federation 在没有 EA 时的贡献 |
 | `FedBest-SAC` | 每轮将最优 worker actor 广播给所有 worker | 贪心 best-worker 共享是否稳定 |
@@ -299,7 +296,7 @@ plots/fedevosac_continuous_ablations_round    # FedEvoSAC 内部消融
 plots/fedevosac_continuous_tables             # final / best return 表格
 ```
 
-默认连续对照组为 `Independent-SAC`、`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median` 和 `FedEvoSAC`；这些 baseline 基于本项目已有联邦 RL 复现框架迁移到 continuous SAC，共享同一环境异质性、评估、日志和 actor 聚合协议。
+默认连续对照组为 `FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median` 和 `FedEvoSAC`；这些 baseline 基于本项目已有联邦 RL 复现框架迁移到 continuous SAC，共享同一环境异质性、评估、日志和 actor 聚合协议。
 
 三种异质联邦场景脚本仍可用于离散附线分析：
 
@@ -393,7 +390,7 @@ python -m src.main \
 
 - 连续环境主线：`LunarLanderContinuous-v3`、`BipedalWalker-v3`、`HalfCheetah-v5`、`Hopper-v5`；
 - `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
-- continuous SAC baseline：`Independent-SAC`、`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
+- continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；
 - GA actor 前缀可配置且当前固定为 `actor.`；
 - reward-aware federated actor aggregation；

@@ -81,6 +81,8 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
             fed_abl = meta.get('fed_ablation', 'n/a')
 
             if plot_kind == 'comparison':
+                if mode == 'independent_sac':
+                    continue
                 if mode == 'fed_evo_rl' and fed_abl != 'full':
                     continue
                 if mode == 'standard_erl' and meta.get('algorithm') == 'FSAC':
