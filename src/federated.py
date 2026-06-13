@@ -147,7 +147,16 @@ class FederatedClient:
 
         self.replay_buffer = HybridReplayBuffer(buffer_size)
         self.policy = self._initialize_policy()
-        self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
+        if self.algorithm == 'SAC':
+            self.critic_optimizer = optim.Adam(
+                list(self.policy.critic1.parameters()) + list(self.policy.critic2.parameters()),
+                lr=lr,
+            )
+            self.actor_optimizer = optim.Adam(self.policy.actor.parameters(), lr=lr)
+            self.alpha_optimizer = optim.Adam([self.policy.log_alpha], lr=lr)
+            self.optimizer = None
+        else:
+            self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
         self._actor_eval = ActorEvaluator(
             self.state_dim, self.action_dim, algorithm=self.algorithm, discrete=self.is_discrete)
         self.training_steps = 0
@@ -289,17 +298,30 @@ class FederatedClient:
             batch = self.replay_buffer.sample(self.batch_size, ea_batch_ratio=0.0)
             for key in ('observations', 'actions', 'rewards', 'next_observations', 'dones'):
                 batch[key] = np.asarray(batch[key], dtype=np.float32)
-            loss = self.policy.update(batch, self.gamma, self.tau)
+            if self.algorithm == 'SAC':
+                loss = self.policy.optimize_step(
+                    batch,
+                    self.critic_optimizer,
+                    self.actor_optimizer,
+                    self.alpha_optimizer,
+                    self.gamma,
+                    self.tau,
+                    grad_clip=10.0,
+                )
+            else:
+                loss = self.policy.update(batch, self.gamma, self.tau)
+                if not torch.isfinite(loss):
+                    continue
+                self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
+                self.optimizer.step()
+                if hasattr(self.policy, 'sync_target'):
+                    self.policy.sync_target(self.tau)
+                if hasattr(self.policy, 'decay_epsilon'):
+                    self.policy.decay_epsilon()
             if not torch.isfinite(loss):
                 continue
-            self.optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
-            self.optimizer.step()
-            if hasattr(self.policy, 'sync_target'):
-                self.policy.sync_target(self.tau)
-            if hasattr(self.policy, 'decay_epsilon'):
-                self.policy.decay_epsilon()
             losses.append(float(loss.item() if hasattr(loss, 'item') else loss))
             self.training_steps += 1
 

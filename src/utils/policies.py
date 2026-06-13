@@ -123,8 +123,15 @@ class SACPolicy(BasePolicy):
         return action_np[0] if single else action_np
 
     def update(self, batch: Dict[str, np.ndarray], gamma: float, tau: float) -> torch.Tensor:
+        """Legacy combined loss. Prefer optimize_step() for correct SAC training."""
+        critic_loss, actor_loss, alpha_loss = self.compute_losses(batch, gamma)
+        return critic_loss + actor_loss + alpha_loss
+
+    def compute_losses(self, batch: Dict[str, np.ndarray], gamma: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         observations = torch.from_numpy(batch['observations']).float()
         actions = torch.from_numpy(batch['actions']).float()
+        if actions.ndim == 1:
+            actions = actions.unsqueeze(-1)
         rewards = torch.from_numpy(batch['rewards']).float().unsqueeze(-1)
         next_observations = torch.from_numpy(batch['next_observations']).float()
         dones = torch.from_numpy(batch['dones']).float().unsqueeze(-1)
@@ -143,7 +150,68 @@ class SACPolicy(BasePolicy):
         min_q = torch.min(self.critic1(new_sa), self.critic2(new_sa))
         actor_loss = (self.alpha.detach() * logp - min_q).mean()
         alpha_loss = -(self.log_alpha * (logp + self.target_entropy).detach()).mean()
-        return critic_loss + actor_loss + alpha_loss
+        return critic_loss, actor_loss, alpha_loss
+
+    def optimize_step(
+        self,
+        batch: Dict[str, np.ndarray],
+        critic_optimizer: torch.optim.Optimizer,
+        actor_optimizer: torch.optim.Optimizer,
+        alpha_optimizer: torch.optim.Optimizer,
+        gamma: float,
+        tau: float,
+        grad_clip: float = 10.0,
+    ) -> torch.Tensor:
+        """Standard SAC update: critic, actor, and temperature are optimized separately."""
+        observations = torch.from_numpy(batch['observations']).float()
+        actions = torch.from_numpy(batch['actions']).float()
+        if actions.ndim == 1:
+            actions = actions.unsqueeze(-1)
+        rewards = torch.from_numpy(batch['rewards']).float().unsqueeze(-1)
+        next_observations = torch.from_numpy(batch['next_observations']).float()
+        dones = torch.from_numpy(batch['dones']).float().unsqueeze(-1)
+
+        with torch.no_grad():
+            next_actions, next_logp = self.actor.sample(next_observations)
+            next_sa = torch.cat([next_observations, next_actions], dim=-1)
+            next_q = torch.min(self.target_critic1(next_sa), self.target_critic2(next_sa))
+            target_q = rewards + gamma * (1.0 - dones) * (next_q - self.alpha.detach() * next_logp)
+
+        sa = torch.cat([observations, actions], dim=-1)
+        critic_loss = (
+            F.smooth_l1_loss(self.critic1(sa), target_q)
+            + F.smooth_l1_loss(self.critic2(sa), target_q)
+        )
+        critic_optimizer.zero_grad()
+        critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            list(self.critic1.parameters()) + list(self.critic2.parameters()),
+            max_norm=grad_clip,
+        )
+        critic_optimizer.step()
+
+        critic_params = list(self.critic1.parameters()) + list(self.critic2.parameters())
+        for p in critic_params:
+            p.requires_grad_(False)
+        new_actions, logp = self.actor.sample(observations)
+        new_sa = torch.cat([observations, new_actions], dim=-1)
+        min_q = torch.min(self.critic1(new_sa), self.critic2(new_sa))
+        actor_loss = (self.alpha.detach() * logp - min_q).mean()
+        actor_optimizer.zero_grad()
+        actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=grad_clip)
+        actor_optimizer.step()
+        for p in critic_params:
+            p.requires_grad_(True)
+
+        _, logp_alpha = self.actor.sample(observations)
+        alpha_loss = -(self.log_alpha * (logp_alpha + self.target_entropy).detach()).mean()
+        alpha_optimizer.zero_grad()
+        alpha_loss.backward()
+        alpha_optimizer.step()
+
+        self.sync_target(tau)
+        return (critic_loss.detach() + actor_loss.detach() + alpha_loss.detach())
 
 
 def _build_discrete_q_critic(state_dim: int, action_dim: int, hidden_dim: int) -> nn.Sequential:

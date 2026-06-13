@@ -146,7 +146,12 @@ def main():
     torch.manual_seed(args.seed)
     info = get_env_info(args.env)
     policies = [SACPolicy(info['state_dim'], info['action_dim']) for _ in range(args.num_workers)]
-    optimizers = [optim.Adam(p.parameters(), lr=args.lr) for p in policies]
+    critic_optimizers = [
+        optim.Adam(list(p.critic1.parameters()) + list(p.critic2.parameters()), lr=args.lr)
+        for p in policies
+    ]
+    actor_optimizers = [optim.Adam(p.actor.parameters(), lr=args.lr) for p in policies]
+    alpha_optimizers = [optim.Adam([p.log_alpha], lr=args.lr) for p in policies]
     buffers = [HybridReplayBuffer(args.buffer_size) for _ in range(args.num_workers)]
 
     exp = args.exp_name or f"{args.baseline_mode}_{args.env}_s{args.seed}"
@@ -182,14 +187,17 @@ def main():
                     batch = buffers[wid].sample(args.batch_size, ea_batch_ratio=0.0)
                     for key in ('observations', 'actions', 'rewards', 'next_observations', 'dones'):
                         batch[key] = np.asarray(batch[key], dtype=np.float32)
-                    loss = policy.update(batch, args.gamma, args.tau)
+                    loss = policy.optimize_step(
+                        batch,
+                        critic_optimizers[wid],
+                        actor_optimizers[wid],
+                        alpha_optimizers[wid],
+                        args.gamma,
+                        args.tau,
+                        grad_clip=10.0,
+                    )
                     if not torch.isfinite(loss):
                         continue
-                    optimizers[wid].zero_grad()
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(policy.parameters(), 10.0)
-                    optimizers[wid].step()
-                    policy.sync_target(args.tau)
                     total_updates += 1
         entropy = _sync_policies(policies, scores, args.baseline_mode, args.federated_temperature)
         if round_idx % args.eval_interval == 0 or round_idx == args.rounds - 1:
