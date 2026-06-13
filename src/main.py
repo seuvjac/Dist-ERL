@@ -55,7 +55,7 @@ METRIC_FIELDS = [
     'client_fitness_std', 'selected_clients', 'aggregation_entropy',
     'fed_round_applied', 'archive_best', 'archive_size',
     'deployable_eval_mean', 'deployable_eval_std',
-    'aggregation_temperature',
+    'aggregation_temperature', 'deployment_rollback', 'deployment_rollback_count',
 ]
 
 

@@ -48,6 +48,10 @@ def parse_args():
                    choices=['independent_sac', 'fedavg_sac', 'fedbest_sac',
                             'fedsoftmax_sac_noea', 'fedmedian_sac'])
     p.add_argument('--federated-temperature', type=float, default=50.0)
+    p.add_argument('--disable-deployment-rollback', action='store_true',
+                   help='Disable rollback to the best evaluated global actor.')
+    p.add_argument('--deployment-rollback-tolerance', type=float, default=0.0,
+                   help='Allowed evaluation drop before restoring the best global actor.')
     return p.parse_args()
 
 
@@ -168,6 +172,9 @@ def main():
     total_steps = 0
     total_updates = 0
     best_eval = -np.inf
+    best_eval_std = 0.0
+    best_actor_state = None
+    rollback_count = 0
     scores = np.zeros(args.num_workers, dtype=np.float64)
     round_idx = 0
     while round_idx < args.rounds or (args.target_env_steps > 0 and total_steps < args.target_env_steps):
@@ -202,7 +209,26 @@ def main():
         entropy = _sync_policies(policies, scores, args.baseline_mode, args.federated_temperature)
         if round_idx % args.eval_interval == 0 or round_idx == args.rounds - 1:
             eval_mean, eval_std = _evaluate(policies, args.env, args.max_episode_steps, args.seed, args.eval_episodes)
-            best_eval = max(best_eval, eval_mean)
+            rollback_applied = 0
+            rollback_enabled = (
+                args.baseline_mode != 'independent_sac'
+                and not args.disable_deployment_rollback
+            )
+            if (
+                rollback_enabled
+                and best_actor_state is not None
+                and eval_mean < best_eval - args.deployment_rollback_tolerance
+            ):
+                for wid, policy in enumerate(policies):
+                    _load_actor_state(policy, best_actor_state)
+                    actor_optimizers[wid].state.clear()
+                eval_mean, eval_std = best_eval, best_eval_std
+                rollback_applied = 1
+                rollback_count += 1
+            elif eval_mean >= best_eval:
+                best_eval = eval_mean
+                best_eval_std = eval_std
+                best_actor_state = _actor_state(policies[0])
             _write_row(metrics_path, {
                 'generation': round_idx,
                 'total_env_steps': total_steps,
@@ -219,11 +245,20 @@ def main():
                 'selected_clients': args.num_workers,
                 'fed_round_applied': int(args.baseline_mode != 'independent_sac'),
                 'archive_best': best_eval,
+                'deployable_eval_mean': eval_mean,
+                'deployable_eval_std': eval_std,
                 'aggregation_entropy': entropy,
                 'client_reward_mean': float(np.mean(worker_rewards)),
                 'client_reward_std': float(np.std(worker_rewards)),
+                'deployment_rollback': rollback_applied,
+                'deployment_rollback_count': rollback_count,
             })
-            print(f"{exp}: round={round_idx} steps={total_steps} eval={eval_mean:.2f}+/-{eval_std:.2f}", flush=True)
+            rollback_note = " rollback=best" if rollback_applied else ""
+            print(
+                f"{exp}: round={round_idx} steps={total_steps} "
+                f"eval={eval_mean:.2f}+/-{eval_std:.2f}{rollback_note}",
+                flush=True,
+            )
         round_idx += 1
     print(metrics_path)
 

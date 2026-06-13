@@ -266,6 +266,8 @@ FedAvg-DQN
 | `RobustFed-SAC-Median` | client actor 做逐参数 median 聚合，critic 保持本地 | 鲁棒聚合思想在异质 client 下是否改善稳定性 |
 | `FedEvoSAC` | continuous SAC 本地学习 + federated actor aggregation + EA actor population | EA 是否能在连续异质控制中提供更稳探索和更好 actor 多样性 |
 
+为避免一次不稳定的本地更新或参数聚合永久覆盖已经验证过的全局 actor，四个联邦 SAC baseline 共用一个轻量的 deployment rollback guard。每个评估节点先把聚合后的 actor 当作候选策略：若固定评估协议下的回报不低于历史最佳值，则更新 server checkpoint；若明显下降，则只恢复历史最佳 actor，并清空与被丢弃 actor 对应的 optimizer momentum。critic、temperature、replay buffer 和训练进度均保留。该保护只保证评估节点上的可部署策略不退化，不意味着 SAC 的真实期望回报严格单调；实验日志通过 `deployment_rollback` 和 `deployment_rollback_count` 披露触发情况。
+
 外部论文原代码复现作为单独的 external-original comparison 管理，不直接和同协议内部基线混名。原因是这些仓库支持的环境、依赖和训练协议不同；能在相同环境上运行的才放入外部复现图。外部复现结果不参与 FedEvoSAC 消融图，也不和内部同协议曲线混称为同一类 baseline。
 
 | 外部代码 | 实际 RL 主体 | 本地路径 | 可比环境 | 使用方式 |
