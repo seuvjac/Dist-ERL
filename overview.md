@@ -5,7 +5,7 @@
 本项目当前主线研究连续动作异质控制环境：
 
 ```text
-MountainCarContinuous-v0
+Swimmer-v5
 LunarLanderContinuous-v3
 HalfCheetah-v5
 ```
@@ -16,7 +16,7 @@ HalfCheetah-v5
 
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
-| `MountainCarContinuous-v0` | continuous | power、gravity、goal position、observation/reward/action perturbation |
+| `Swimmer-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 | `LunarLanderContinuous-v3` | continuous | gravity、wind、turbulence、observation/reward/action perturbation |
 | `HalfCheetah-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 
@@ -47,7 +47,7 @@ FedEvoSAC
 当前连续主实验环境：
 
 ```text
-MountainCarContinuous-v0
+Swimmer-v5
 LunarLanderContinuous-v3
 HalfCheetah-v5
 ```
@@ -301,7 +301,7 @@ NUM_WORKERS=4
 默认连续环境：
 
 ```text
-MountainCarContinuous-v0
+Swimmer-v5
 LunarLanderContinuous-v3
 HalfCheetah-v5
 ```
@@ -400,13 +400,13 @@ python -m src.main \
 - reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
 - reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；核心证据优先放在连续 `MountainCarContinuous-v0`、`LunarLanderContinuous-v3` 和 `HalfCheetah-v5`。强异质结论应写成相对改善，而不是声称完全解决异质性退化。
+最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；核心证据优先放在连续 `Swimmer-v5`、`LunarLanderContinuous-v3` 和 `HalfCheetah-v5`。强异质结论应写成相对改善，而不是声称完全解决异质性退化。
 
 ## 12. 当前实现状态
 
 已完成：
 
-- 连续环境主线：`MountainCarContinuous-v0`、`LunarLanderContinuous-v3`、`HalfCheetah-v5`；
+- 连续环境主线：`Swimmer-v5`、`LunarLanderContinuous-v3`、`HalfCheetah-v5`；
 - `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；

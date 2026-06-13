@@ -106,7 +106,7 @@ FEDRL_HETEROGENEOUS_ENVS = [
 ]
 
 FEDRL_CONTINUOUS_ENVS = [
-    'MountainCarContinuous-v0',
+    'Swimmer-v5',
     'LunarLanderContinuous-v3',
     'HalfCheetah-v5',
 ]
@@ -176,9 +176,9 @@ def env_run_preset(env_id: str) -> dict:
             'population_size': 30, 'num_workers': 4,
             'max_generations': 100, 'max_episode_steps': 1000,
         },
-        'MountainCarContinuous-v0': {
+        'Swimmer-v5': {
             'population_size': 20, 'num_workers': 3,
-            'max_generations': 60, 'max_episode_steps': 999,
+            'max_generations': 80, 'max_episode_steps': 1000,
         },
         'LunarLanderContinuous-v3': {
             'population_size': 24, 'num_workers': 4,

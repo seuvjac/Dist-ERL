@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 
-ENVS=${ENVS:-"MountainCarContinuous-v0 LunarLanderContinuous-v3 HalfCheetah-v5"}
+ENVS=${ENVS:-"Swimmer-v5 LunarLanderContinuous-v3 HalfCheetah-v5"}
 SEEDS=${SEEDS:-"0 1 2"}
 FED_VARIANTS=${FED_VARIANTS:-"full"}
 SAC_BASELINES=${SAC_BASELINES:-"fedavg_sac fedbest_sac fedsoftmax_sac_noea fedmedian_sac"}
