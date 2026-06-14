@@ -40,7 +40,7 @@ from src.utils.policy_utils import build_model_template
 from src.worker import RolloutWorker
 
 FED_EVOFSAC_ENVS = ('CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3')
-FED_EVOSAC_ENVS = ('Swimmer-v5', 'LunarLanderContinuous-v3', 'HalfCheetah-v5')
+FED_EVOSAC_ENVS = ('Swimmer-v5', 'Reacher-v5', 'HalfCheetah-v5')
 
 METRIC_FIELDS = [
     'generation', 'total_env_steps', 'eval_reward_mean', 'eval_reward_std',
@@ -56,6 +56,7 @@ METRIC_FIELDS = [
     'fed_round_applied', 'archive_best', 'archive_size',
     'deployable_eval_mean', 'deployable_eval_std',
     'aggregation_temperature', 'deployment_rollback', 'deployment_rollback_count',
+    'candidate_eval_mean', 'candidate_eval_std', 'local_updates_per_worker',
 ]
 
 

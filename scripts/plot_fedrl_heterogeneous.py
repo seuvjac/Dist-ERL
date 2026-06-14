@@ -26,8 +26,8 @@ def parse_args():
                    help='Optional x-axis cap after x-axis conversion')
     p.add_argument('--target-x', type=float, default=None,
                    help='Force every method in each plot to extend to this x value, holding the final return')
-    p.add_argument('--metric', default='current', choices=['current', 'best'],
-                   help='current uses eval_reward_mean; best uses best/archive-style optimistic score')
+    p.add_argument('--metric', default='current', choices=['current', 'candidate', 'best'],
+                   help='current uses deployable eval; candidate uses the current training policy; best uses optimistic archive metrics')
     return p.parse_args()
 
 
@@ -58,6 +58,13 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
                         x = _num(row.get('total_env_steps'))
                     if metric == 'current':
                         vals = [_num(row.get('eval_reward_mean'))]
+                    elif metric == 'candidate':
+                        candidate_vals = [
+                            _num(row.get('candidate_eval_mean')),
+                            _num(row.get('eval_ea_mean')),
+                            _num(row.get('eval_reward_mean')),
+                        ]
+                        vals = [next((v for v in candidate_vals if np.isfinite(v)), np.nan)]
                     else:
                         vals = [
                             _num(row.get('eval_reward_mean')),

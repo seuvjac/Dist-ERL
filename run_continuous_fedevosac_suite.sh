@@ -5,13 +5,14 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 
-ENVS=${ENVS:-"Swimmer-v5 LunarLanderContinuous-v3 HalfCheetah-v5"}
+ENVS=${ENVS:-"Swimmer-v5 Reacher-v5 HalfCheetah-v5"}
 SEEDS=${SEEDS:-"0 1 2"}
 FED_VARIANTS=${FED_VARIANTS:-"full"}
 SAC_BASELINES=${SAC_BASELINES:-"fedavg_sac fedbest_sac fedsoftmax_sac_noea fedmedian_sac"}
 LOG_DIR=${LOG_DIR:-"logs_fedevosac_continuous_mixed"}
 SAC_LOG_DIR=${SAC_LOG_DIR:-"logs_sac_continuous_mixed"}
 COMPARISON_OUT_DIR=${COMPARISON_OUT_DIR:-"plots/fedevosac_continuous_comparison_round"}
+CANDIDATE_OUT_DIR=${CANDIDATE_OUT_DIR:-"plots/fedevosac_continuous_candidate_round"}
 ABLATION_OUT_DIR=${ABLATION_OUT_DIR:-"plots/fedevosac_continuous_ablations_round"}
 SUMMARY_OUT_DIR=${SUMMARY_OUT_DIR:-"plots/fedevosac_continuous_tables"}
 PLOT_X_AXIS=${PLOT_X_AXIS:-"round"}
@@ -19,6 +20,8 @@ PLOT_METRIC=${PLOT_METRIC:-"current"}
 CLIENT_HETEROGENEITY=${CLIENT_HETEROGENEITY:-"0.60"}
 CLIENT_HETEROGENEITY_MODE=${CLIENT_HETEROGENEITY_MODE:-"mixed"}
 BUDGET_PRESET=${BUDGET_PRESET:-"reduced"}
+BASELINE_UPDATE_TO_DATA_RATIO=${BASELINE_UPDATE_TO_DATA_RATIO:-"0.02"}
+BASELINE_MAX_UPDATES_PER_ROUND=${BASELINE_MAX_UPDATES_PER_ROUND:-"20"}
 
 for ENV_NAME in $ENVS; do
   read POP CLIENTS GENS STEPS <<<"$(python3 - <<PY
@@ -40,7 +43,7 @@ PY
     CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-2}
     CLIENT_UPDATES=${FED_CLIENT_UPDATES:-8}
   fi
-  CLIENTS=${FED_NUM_CLIENTS:-4}
+  CLIENTS=${FED_NUM_CLIENTS:-3}
   WORKERS=${FED_NUM_WORKERS:-$CLIENTS}
   TARGET_STEPS=${TARGET_ENV_STEPS:-$(python3 - <<PY
 pop=int('$POP'); clients=int('$CLIENTS'); gens=int('$GENS'); steps=int('$STEPS')
@@ -102,6 +105,8 @@ PY
         --target-env-steps "$TARGET_STEPS" \
         --num-workers "$CLIENTS" \
         --updates "$CLIENT_UPDATES" \
+        --update-to-data-ratio "$BASELINE_UPDATE_TO_DATA_RATIO" \
+        --max-updates-per-round "$BASELINE_MAX_UPDATES_PER_ROUND" \
         --batch-size 128 \
         --eval-episodes "$EVAL_EPISODES" \
         --max-episode-steps "$STEPS" \
@@ -122,6 +127,15 @@ python3 scripts/plot_fedrl_heterogeneous.py \
   --plot-kind comparison \
   --x-axis "$PLOT_X_AXIS" \
   --metric "$PLOT_METRIC"
+
+python3 scripts/plot_fedrl_heterogeneous.py \
+  --fed-log-dir "$LOG_DIR" \
+  --paper-log-dir "$SAC_LOG_DIR" \
+  --dqn-log-dir "" \
+  --out-dir "$CANDIDATE_OUT_DIR" \
+  --plot-kind comparison \
+  --x-axis "$PLOT_X_AXIS" \
+  --metric candidate
 
 python3 scripts/plot_fedrl_heterogeneous.py \
   --fed-log-dir "$LOG_DIR" \

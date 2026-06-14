@@ -168,7 +168,7 @@ def _apply_classic_control_heterogeneity(
         if hasattr(base, 'max_speed'):
             base.max_speed = 0.07 * max(0.45, 1.0 - 0.25 * scale_boost * strength)
         return
-    if env_name in ('HalfCheetah-v5', 'Hopper-v5', 'Swimmer-v5'):
+    if env_name in ('HalfCheetah-v5', 'Hopper-v5', 'Swimmer-v5', 'Reacher-v5'):
         scale_boost = 1.8 if mode == 'mixed' else 1.0
         if hasattr(base, 'model'):
             model = base.model

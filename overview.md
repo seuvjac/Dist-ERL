@@ -6,7 +6,7 @@
 
 ```text
 Swimmer-v5
-LunarLanderContinuous-v3
+Reacher-v5
 HalfCheetah-v5
 ```
 
@@ -17,7 +17,7 @@ HalfCheetah-v5
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
 | `Swimmer-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
-| `LunarLanderContinuous-v3` | continuous | gravity、wind、turbulence、observation/reward/action perturbation |
+| `Reacher-v5` | continuous | body mass、joint damping、geom friction、observation/reward/action perturbation |
 | `HalfCheetah-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 
 当前在每个原始环境上定义三种异质联邦场景：
@@ -48,7 +48,7 @@ FedEvoSAC
 
 ```text
 Swimmer-v5
-LunarLanderContinuous-v3
+Reacher-v5
 HalfCheetah-v5
 ```
 
@@ -73,7 +73,7 @@ FedEvoSAC
 主入口：
 
 ```bash
-python -m src.main --mode fed_evo_rl --algorithm SAC --env LunarLanderContinuous-v3
+python -m src.main --mode fed_evo_rl --algorithm SAC --env Reacher-v5
 ```
 
 ## 4. 算法流程
@@ -266,13 +266,15 @@ FedAvg-DQN
 | `RobustFed-SAC-Median` | client actor 做逐参数 median 聚合，critic 保持本地 | 鲁棒聚合思想在异质 client 下是否改善稳定性 |
 | `FedEvoSAC` | continuous SAC 本地学习 + federated actor aggregation + EA actor population | EA 是否能在连续异质控制中提供更稳探索和更好 actor 多样性 |
 
-为避免一次不稳定的本地更新或参数聚合永久覆盖已经验证过的全局 actor，四个联邦 SAC baseline 共用一个轻量的 deployment rollback guard。每个评估节点先把聚合后的 actor 当作候选策略：若固定评估协议下的回报不低于历史最佳值，则更新 server checkpoint；若明显下降，则只恢复历史最佳 actor，并清空与被丢弃 actor 对应的 optimizer momentum。critic、temperature、replay buffer 和训练进度均保留。该保护只保证评估节点上的可部署策略不退化，不意味着 SAC 的真实期望回报严格单调；实验日志通过 `deployment_rollback` 和 `deployment_rollback_count` 披露触发情况。
+四个联邦 SAC baseline 使用相同的训练/部署分离协议。client 的训练 actor 始终继续执行本地 SAC 更新和各自的联邦聚合，不因一次评估下降而回滚；server 另外保存固定评估协议下的历史最佳 actor，作为 deployable checkpoint。主图的 `eval_reward_mean` 画可部署 checkpoint，候选策略辅助图画 `candidate_eval_mean`，因此既能避免已验证策略被覆盖，也能真实展示当前训练策略的上升、波动或失败。`deployment_rollback` 字段现在表示本轮继续保留旧 checkpoint，而不是把训练 actor 回滚。
+
+为避免旧实现中“每收集 1000 个 transition 只更新 4 次”的欠训练问题，baseline 按新采样量计算有限的本地 SAC 更新数：`updates = min(max(base_updates, ceil(new_steps * update_to_data_ratio)), max_updates_per_round)`。默认 `update_to_data_ratio=0.02`、上限 `20`，在不改变网络、损失函数和聚合规则的前提下，使 critic/actor 获得足够更新。联邦聚合替换 actor 参数后清空 actor optimizer 的陈旧 Adam 动量；本地 critic optimizer、temperature optimizer 和 replay buffer 全部保留。FedAvg、FedBest、FedSoftmax 和 Median 的原聚合思想保持不变。
 
 外部论文原代码复现作为单独的 external-original comparison 管理，不直接和同协议内部基线混名。原因是这些仓库支持的环境、依赖和训练协议不同；能在相同环境上运行的才放入外部复现图。外部复现结果不参与 FedEvoSAC 消融图，也不和内部同协议曲线混称为同一类 baseline。
 
 | 外部代码 | 实际 RL 主体 | 本地路径 | 可比环境 | 使用方式 |
 |----------|--------------|----------|----------|----------|
-| FedFormer | SAC | `/home/ywj/code/FedFormer` | MetaWorld MT10，不是当前四个 Gym/Gymnasium 连续主环境 | related work 或单独 MetaWorld 复现，不混入主图 |
+| FedFormer | SAC | `/home/ywj/code/FedFormer` | MetaWorld MT10，不是当前三个 Gymnasium 连续主环境 | related work 或单独 MetaWorld 复现，不混入主图 |
 | Byzantine-Federated-RL / FedPG-BR | policy gradient | `/home/ywj/code/Byzantine-Federated-RL` | CartPole-v1、LunarLander-v2、HalfCheetah-v2 | 可作为 CartPole/LunarLander/HalfCheetah 外部原代码复现 |
 | Federated-DRL | DQN / DDQN | `/home/ywj/code/Federated-DRL` | CartPole-v1、LunarLander-v2、Mario | 可作为 FedAvg-DQN 外部原代码复现 |
 | FederatedRL | PPO | `/home/ywj/code/FederatedRL` | CartPole-v1、若干 MuJoCo/IoT 任务 | 可作为 PPO-FedRL related work，默认不进连续主图 |
@@ -280,7 +282,7 @@ FedAvg-DQN
 当前可严格复现的外部对照边界：
 
 - `HalfCheetah`：`Byzantine-Federated-RL` 支持旧版 `HalfCheetah-v2`，本项目主线使用 `HalfCheetah-v5`；可做 external-original 辅助图，但不能和内部同协议主图混称。
-- `LunarLander`：外部仓库多使用 `LunarLander-v2` 或离散版本，本项目主环境是 Gymnasium 的 `LunarLanderContinuous-v3`；可做外部复现图，但图注必须说明环境版本和动作空间不同。
+- `Reacher`：当前外部仓库没有同版本、同协议的严格复现结果，因此只进入本项目内部同协议主图。
 - `CartPole / Acrobot / MountainCar`：保留为离散附线；外部 DQN / FedPG 代码可用于 related-work 复现，不进入连续 FedEvoSAC 主图。
 - `FedFormer`：原论文是 MetaWorld 连续控制 SAC；若要比较，应另开 MetaWorld 复现实验。
 
@@ -297,14 +299,14 @@ FedAvg-DQN
 ```text
 CLIENT_HETEROGENEITY=0.60
 CLIENT_HETEROGENEITY_MODE=mixed
-NUM_WORKERS=4
+NUM_WORKERS=3
 ```
 
 默认连续环境：
 
 ```text
 Swimmer-v5
-LunarLanderContinuous-v3
+Reacher-v5
 HalfCheetah-v5
 ```
 
@@ -312,6 +314,7 @@ HalfCheetah-v5
 
 ```text
 plots/fedevosac_continuous_comparison_round   # FedEvoSAC vs continuous SAC 横向对比
+plots/fedevosac_continuous_candidate_round    # 当前训练 candidate，展示真实学习波动
 plots/fedevosac_continuous_ablations_round    # FedEvoSAC 内部消融
 plots/fedevosac_continuous_tables             # final / best return 表格
 ```
@@ -367,7 +370,7 @@ BUDGET_PRESET=full ./run_continuous_fedevosac_suite.sh
 
 ```bash
 python -m src.main \
-  --env LunarLanderContinuous-v3 \
+  --env Reacher-v5 \
   --mode fed_evo_rl \
   --algorithm SAC \
   --population-size 4 \
@@ -393,22 +396,25 @@ python -m src.main \
 | `client_fitness_std` | 跨 client 评估方差 |
 | `aggregation_entropy` | 联邦聚合权重熵 |
 | `archive_best` | global elite archive 历史最佳 fitness |
+| `candidate_eval_mean` | 当前聚合训练 actor 的固定协议评估回报 |
+| `deployable_eval_mean` | server 历史最佳可部署 actor 的评估回报 |
+| `local_updates_per_worker` | 每轮每个 baseline client 实际执行的本地 SAC 更新数 |
 | `comm_upload_bytes` | 实际上传 actor 参数量估计 |
 | `comm_full_traj_bytes` | 假设上传完整 trajectory 的通信量估计 |
 
-主曲线默认使用 `eval_reward_mean`。对 `FedEvoSAC` 来说，当前可部署策略定义为 global elite archive 中的 best actor，因此 `eval_reward_mean` 记录 deployable archive policy 的评估回报；本地 SAC rollout 分数单独保存在 `client_reward_mean` / `client_reward_std`。这样可以避免 EA 已经找到高质量 actor，但主图却只画联邦本地训练 rollout 的问题。`best_fitness` / `archive_best` 仍作为辅助表格或附图指标，用于解释 EA 搜索过程。FedRL 主文建议优先使用 communication rounds 作为横坐标，因为它直接对应联邦通信效率；raw environment steps 和 normalized progress 作为补充视角：
+主曲线默认使用 `eval_reward_mean`，表示 server 当前可部署策略。baseline 的当前训练策略记录在 `candidate_eval_mean`，并单独生成 candidate learning curve；FedEvoSAC 的本地 SAC rollout 分数保存在 `client_reward_mean` / `client_reward_std`。`best_fitness` / `archive_best` 仍作为辅助表格或附图指标，用于解释 EA 搜索过程。FedRL 主文建议优先使用 communication rounds 作为横坐标，因为它直接对应联邦通信效率；raw environment steps 和 normalized progress 作为补充视角：
 
 - reward vs communication round / generation：主图，说明联邦通信效率。
 - reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
 - reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；核心证据优先放在连续 `Swimmer-v5`、`LunarLanderContinuous-v3` 和 `HalfCheetah-v5`。强异质结论应写成相对改善，而不是声称完全解决异质性退化。
+最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；核心证据优先放在连续 `Swimmer-v5`、`Reacher-v5` 和 `HalfCheetah-v5`。强异质结论应写成相对改善，而不是声称完全解决异质性退化。
 
 ## 12. 当前实现状态
 
 已完成：
 
-- 连续环境主线：`Swimmer-v5`、`LunarLanderContinuous-v3`、`HalfCheetah-v5`；
+- 连续环境主线：`Swimmer-v5`、`Reacher-v5`、`HalfCheetah-v5`；
 - `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；

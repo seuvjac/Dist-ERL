@@ -4,6 +4,7 @@
 import argparse
 import csv
 import json
+import math
 import random
 import sys
 import time
@@ -24,13 +25,17 @@ from src.utils.replay_buffer import HybridReplayBuffer
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--env', default='LunarLanderContinuous-v3')
+    p.add_argument('--env', default='Reacher-v5')
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--rounds', type=int, default=120)
     p.add_argument('--target-env-steps', type=int, default=0)
     p.add_argument('--num-workers', type=int, default=4)
     p.add_argument('--max-episode-steps', type=int, default=1000)
     p.add_argument('--updates', type=int, default=8)
+    p.add_argument('--update-to-data-ratio', type=float, default=0.02,
+                   help='Minimum SAC gradient updates per newly collected transition.')
+    p.add_argument('--max-updates-per-round', type=int, default=20,
+                   help='Upper bound on SAC updates per worker and communication round.')
     p.add_argument('--batch-size', type=int, default=128)
     p.add_argument('--buffer-size', type=int, default=200000)
     p.add_argument('--lr', type=float, default=3e-4)
@@ -49,9 +54,9 @@ def parse_args():
                             'fedsoftmax_sac_noea', 'fedmedian_sac'])
     p.add_argument('--federated-temperature', type=float, default=50.0)
     p.add_argument('--disable-deployment-rollback', action='store_true',
-                   help='Disable rollback to the best evaluated global actor.')
+                   help='Report the current candidate instead of the best deployment checkpoint.')
     p.add_argument('--deployment-rollback-tolerance', type=float, default=0.0,
-                   help='Allowed evaluation drop before restoring the best global actor.')
+                   help='Allowed candidate drop before retaining the best deployment checkpoint.')
     return p.parse_args()
 
 
@@ -180,6 +185,7 @@ def main():
     while round_idx < args.rounds or (args.target_env_steps > 0 and total_steps < args.target_env_steps):
         round_start = time.time()
         worker_rewards = []
+        round_update_counts = []
         for wid, policy in enumerate(policies):
             reward, transitions, steps = _rollout(
                 policy, args.env, args.max_episode_steps, args.seed + round_idx * 10000 + wid,
@@ -189,8 +195,14 @@ def main():
             total_steps += steps
             for item in transitions:
                 buffers[wid].add_rl_data(*item)
+            local_updates = 0
             if len(buffers[wid]) >= args.batch_size:
-                for _ in range(args.updates):
+                adaptive_updates = int(math.ceil(steps * max(0.0, args.update_to_data_ratio)))
+                local_updates = min(
+                    max(args.updates, adaptive_updates),
+                    max(args.updates, args.max_updates_per_round),
+                )
+                for _ in range(local_updates):
                     batch = buffers[wid].sample(args.batch_size, ea_batch_ratio=0.0)
                     for key in ('observations', 'actions', 'rewards', 'next_observations', 'dones'):
                         batch[key] = np.asarray(batch[key], dtype=np.float32)
@@ -206,34 +218,38 @@ def main():
                     if not torch.isfinite(loss):
                         continue
                     total_updates += 1
+            round_update_counts.append(local_updates)
         entropy = _sync_policies(policies, scores, args.baseline_mode, args.federated_temperature)
+        if args.baseline_mode != 'independent_sac':
+            for optimizer in actor_optimizers:
+                optimizer.state.clear()
         if round_idx % args.eval_interval == 0 or round_idx == args.rounds - 1:
-            eval_mean, eval_std = _evaluate(policies, args.env, args.max_episode_steps, args.seed, args.eval_episodes)
-            rollback_applied = 0
-            rollback_enabled = (
+            candidate_mean, candidate_std = _evaluate(
+                policies, args.env, args.max_episode_steps, args.seed, args.eval_episodes)
+            checkpoint_retained = 0
+            checkpoint_enabled = (
                 args.baseline_mode != 'independent_sac'
                 and not args.disable_deployment_rollback
             )
-            if (
-                rollback_enabled
-                and best_actor_state is not None
-                and eval_mean < best_eval - args.deployment_rollback_tolerance
-            ):
-                for wid, policy in enumerate(policies):
-                    _load_actor_state(policy, best_actor_state)
-                    actor_optimizers[wid].state.clear()
-                eval_mean, eval_std = best_eval, best_eval_std
-                rollback_applied = 1
+            if candidate_mean >= best_eval - args.deployment_rollback_tolerance:
+                if candidate_mean >= best_eval:
+                    best_eval = candidate_mean
+                    best_eval_std = candidate_std
+                    best_actor_state = _actor_state(policies[0])
+            elif checkpoint_enabled and best_actor_state is not None:
+                checkpoint_retained = 1
                 rollback_count += 1
-            elif eval_mean >= best_eval:
-                best_eval = eval_mean
-                best_eval_std = eval_std
-                best_actor_state = _actor_state(policies[0])
+            if checkpoint_enabled and best_actor_state is not None:
+                deploy_mean, deploy_std = best_eval, best_eval_std
+            else:
+                deploy_mean, deploy_std = candidate_mean, candidate_std
             _write_row(metrics_path, {
                 'generation': round_idx,
                 'total_env_steps': total_steps,
-                'eval_reward_mean': eval_mean,
-                'eval_reward_std': eval_std,
+                'eval_reward_mean': deploy_mean,
+                'eval_reward_std': deploy_std,
+                'eval_ea_mean': candidate_mean,
+                'eval_ea_std': candidate_std,
                 'best_fitness': best_eval,
                 'mean_fitness': float(np.mean(worker_rewards)),
                 'rl_steps': total_updates,
@@ -245,18 +261,22 @@ def main():
                 'selected_clients': args.num_workers,
                 'fed_round_applied': int(args.baseline_mode != 'independent_sac'),
                 'archive_best': best_eval,
-                'deployable_eval_mean': eval_mean,
-                'deployable_eval_std': eval_std,
+                'deployable_eval_mean': deploy_mean,
+                'deployable_eval_std': deploy_std,
                 'aggregation_entropy': entropy,
                 'client_reward_mean': float(np.mean(worker_rewards)),
                 'client_reward_std': float(np.std(worker_rewards)),
-                'deployment_rollback': rollback_applied,
+                'deployment_rollback': checkpoint_retained,
                 'deployment_rollback_count': rollback_count,
+                'candidate_eval_mean': candidate_mean,
+                'candidate_eval_std': candidate_std,
+                'local_updates_per_worker': float(np.mean(round_update_counts)),
             })
-            rollback_note = " rollback=best" if rollback_applied else ""
+            checkpoint_note = " deploy=checkpoint" if checkpoint_retained else ""
             print(
                 f"{exp}: round={round_idx} steps={total_steps} "
-                f"eval={eval_mean:.2f}+/-{eval_std:.2f}{rollback_note}",
+                f"candidate={candidate_mean:.2f}+/-{candidate_std:.2f} "
+                f"deploy={deploy_mean:.2f}{checkpoint_note}",
                 flush=True,
             )
         round_idx += 1
