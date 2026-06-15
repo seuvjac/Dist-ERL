@@ -20,6 +20,8 @@ HalfCheetah-v5
 | `Reacher-v5` | continuous | body mass、joint damping、geom friction、observation/reward/action perturbation |
 | `HalfCheetah-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 
+候选替代环境为 `Hopper-v5`。它使用 3 维 `[-1, 1]` 连续动作，需要同时学习平衡和向前运动，复杂度低于 HalfCheetah，但仍能体现 SAC 本地学习、联邦 actor 聚合和 EA 探索的差异。当前先作为 HalfCheetah 的诊断 pilot；完成同协议比较后再决定是否进入正式三环境主线。
+
 当前在每个原始环境上定义三种异质联邦场景：
 
 | 场景 | `client_heterogeneity_mode` | 强度 | 含义 |

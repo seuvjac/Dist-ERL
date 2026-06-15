@@ -40,7 +40,12 @@ from src.utils.policy_utils import build_model_template
 from src.worker import RolloutWorker
 
 FED_EVOFSAC_ENVS = ('CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3')
-FED_EVOSAC_ENVS = ('Swimmer-v5', 'Reacher-v5', 'HalfCheetah-v5')
+FED_EVOSAC_ENVS = (
+    'Swimmer-v5',
+    'Reacher-v5',
+    'HalfCheetah-v5',
+    'Hopper-v5',
+)
 
 METRIC_FIELDS = [
     'generation', 'total_env_steps', 'eval_reward_mean', 'eval_reward_std',
