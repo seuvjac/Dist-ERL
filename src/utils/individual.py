@@ -1,6 +1,7 @@
 """Data structures for FedEvoRL."""
 
 from dataclasses import dataclass
+import copy
 import numpy as np
 from typing import Dict, Any, Optional
 import pickle
@@ -63,5 +64,6 @@ class Individual:
             id=self.id,
             weights=new_weights,
             fitness=self.fitness,
-            seed=self.seed
+            seed=self.seed,
+            hyperparams=copy.deepcopy(self.hyperparams),
         )

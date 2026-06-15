@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 
-ENVS=${ENVS:-"Swimmer-v5 Reacher-v5 HalfCheetah-v5"}
+ENVS=${ENVS:-"Swimmer-v5 Reacher-v5 HalfCheetah-v5 Hopper-v5"}
 SEEDS=${SEEDS:-"0 1 2"}
 FED_VARIANTS=${FED_VARIANTS:-"full"}
 SAC_BASELINES=${SAC_BASELINES:-"fedavg_sac fedbest_sac fedsoftmax_sac_noea fedmedian_sac"}
@@ -17,11 +17,15 @@ ABLATION_OUT_DIR=${ABLATION_OUT_DIR:-"plots/fedevosac_continuous_ablations_round
 SUMMARY_OUT_DIR=${SUMMARY_OUT_DIR:-"plots/fedevosac_continuous_tables"}
 PLOT_X_AXIS=${PLOT_X_AXIS:-"round"}
 PLOT_METRIC=${PLOT_METRIC:-"current"}
-CLIENT_HETEROGENEITY=${CLIENT_HETEROGENEITY:-"0.60"}
-CLIENT_HETEROGENEITY_MODE=${CLIENT_HETEROGENEITY_MODE:-"mixed"}
+CLIENT_HETEROGENEITY=${CLIENT_HETEROGENEITY:-"0.0"}
+CLIENT_HETEROGENEITY_MODE=${CLIENT_HETEROGENEITY_MODE:-"none"}
 BUDGET_PRESET=${BUDGET_PRESET:-"reduced"}
-BASELINE_UPDATE_TO_DATA_RATIO=${BASELINE_UPDATE_TO_DATA_RATIO:-"0.02"}
+TARGET_ENV_STEPS=${TARGET_ENV_STEPS:-"120000"}
+BASELINE_UPDATE_TO_DATA_RATIO=${BASELINE_UPDATE_TO_DATA_RATIO:-"0.05"}
 BASELINE_MAX_UPDATES_PER_ROUND=${BASELINE_MAX_UPDATES_PER_ROUND:-"20"}
+BASELINE_BASE_UPDATES=${BASELINE_BASE_UPDATES:-"4"}
+BASELINE_AGGREGATION_INTERVAL=${BASELINE_AGGREGATION_INTERVAL:-"5"}
+BASELINE_SERVER_LEARNING_RATE=${BASELINE_SERVER_LEARNING_RATE:-"0.25"}
 
 for ENV_NAME in $ENVS; do
   read POP CLIENTS GENS STEPS <<<"$(python3 - <<PY
@@ -31,29 +35,37 @@ print(p['population_size'], p['num_workers'], p['max_generations'], p['max_episo
 PY
 )"
   if [[ "$BUDGET_PRESET" == "reduced" ]]; then
-    POP=${FED_POPULATION_SIZE:-$(( POP < 10 ? POP : 10 ))}
+    POP=${FED_POPULATION_SIZE:-8}
     GENS=${FED_MAX_GENERATIONS:-$(( GENS < 15 ? GENS : 15 ))}
     EVAL_EPISODES=${FED_EVAL_EPISODES:-2}
-    CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-1}
-    CLIENT_UPDATES=${FED_CLIENT_UPDATES:-4}
+    ARCHIVE_EVAL_CANDIDATES=${FED_ARCHIVE_EVAL_CANDIDATES:-2}
+    ARCHIVE_EVAL_EPISODES=${FED_ARCHIVE_EVAL_EPISODES:-2}
   else
     POP=${FED_POPULATION_SIZE:-$POP}
     GENS=${FED_MAX_GENERATIONS:-$GENS}
     EVAL_EPISODES=${FED_EVAL_EPISODES:-3}
     CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-2}
     CLIENT_UPDATES=${FED_CLIENT_UPDATES:-8}
+    ARCHIVE_EVAL_CANDIDATES=${FED_ARCHIVE_EVAL_CANDIDATES:-3}
+    ARCHIVE_EVAL_EPISODES=${FED_ARCHIVE_EVAL_EPISODES:-3}
   fi
+  case "$ENV_NAME" in
+    Reacher-v5)
+      STEPS=${FED_MAX_EPISODE_STEPS:-50}
+      CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-4}
+      CLIENT_UPDATES=${FED_CLIENT_UPDATES:-12}
+      CLIENT_CRITIC_WARMUP=${FED_CLIENT_CRITIC_WARMUP:-6}
+      ;;
+    Swimmer-v5|HalfCheetah-v5|Hopper-v5)
+      STEPS=${FED_MAX_EPISODE_STEPS:-200}
+      CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-2}
+      CLIENT_UPDATES=${FED_CLIENT_UPDATES:-20}
+      CLIENT_CRITIC_WARMUP=${FED_CLIENT_CRITIC_WARMUP:-8}
+      ;;
+  esac
   CLIENTS=${FED_NUM_CLIENTS:-3}
   WORKERS=${FED_NUM_WORKERS:-$CLIENTS}
-  TARGET_STEPS=${TARGET_ENV_STEPS:-$(python3 - <<PY
-pop=int('$POP'); clients=int('$CLIENTS'); gens=int('$GENS'); steps=int('$STEPS')
-eval_episodes=int('$EVAL_EPISODES'); rollouts=int('$CLIENT_ROLLOUTS')
-interval=5
-eval_half=max(1, eval_episodes//2)
-fed_rounds=sum(1 for g in range(gens) if g % interval == 0)
-print(gens*pop*clients*steps*eval_half + fed_rounds*clients*rollouts*steps)
-PY
-)}
+  TARGET_STEPS=$TARGET_ENV_STEPS
   if [[ -n "${BASELINE_ROUNDS:-}" ]]; then
     THIS_BASELINE_ROUNDS="$BASELINE_ROUNDS"
   else
@@ -82,15 +94,18 @@ PY
         --client-heterogeneity "$CLIENT_HETEROGENEITY" \
         --client-heterogeneity-mode "$CLIENT_HETEROGENEITY_MODE" \
         --fed-aggregation softmax \
-        --fed-aggregation-interval 5 \
+        --fed-aggregation-interval 1 \
         --fed-aggregation-temperature 75 \
         --fed-delta-clip-norm 5 \
         --ea-weight-clip 5 \
         --elite-archive-size 5 \
         --elite-archive-restore-copies 1 \
+        --archive-eval-candidates "$ARCHIVE_EVAL_CANDIDATES" \
+        --archive-eval-episodes "$ARCHIVE_EVAL_EPISODES" \
         --client-rollouts "$CLIENT_ROLLOUTS" \
         --client-updates "$CLIENT_UPDATES" \
-        --batch-size 128 \
+        --client-critic-warmup-updates "$CLIENT_CRITIC_WARMUP" \
+        --batch-size 64 \
         --eval-episodes "$EVAL_EPISODES" \
         --seed "$SEED" \
         --log-dir "$LOG_DIR" \
@@ -104,10 +119,14 @@ PY
         --rounds "$THIS_BASELINE_ROUNDS" \
         --target-env-steps "$TARGET_STEPS" \
         --num-workers "$CLIENTS" \
-        --updates "$CLIENT_UPDATES" \
+        --updates "$BASELINE_BASE_UPDATES" \
         --update-to-data-ratio "$BASELINE_UPDATE_TO_DATA_RATIO" \
         --max-updates-per-round "$BASELINE_MAX_UPDATES_PER_ROUND" \
-        --batch-size 128 \
+        --aggregation-interval "$BASELINE_AGGREGATION_INTERVAL" \
+        --server-learning-rate "$BASELINE_SERVER_LEARNING_RATE" \
+        --aggregation-eval-episodes "$ARCHIVE_EVAL_EPISODES" \
+        --eval-interval "$BASELINE_AGGREGATION_INTERVAL" \
+        --batch-size 64 \
         --eval-episodes "$EVAL_EPISODES" \
         --max-episode-steps "$STEPS" \
         --client-heterogeneity "$CLIENT_HETEROGENEITY" \

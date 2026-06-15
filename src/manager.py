@@ -148,6 +148,44 @@ class EAManager:
         best = self._elite_archive[0].fitness if self._elite_archive else 0.0
         return {'archive_size': len(self._elite_archive), 'archive_best': float(best)}
 
+    def update_elite_archive_evaluated(
+        self,
+        evaluated: List[Dict[str, Any]],
+        archive_size: int = 5,
+    ) -> Dict[str, float]:
+        """Update the archive only with independently validated candidates."""
+        self._archive_size = max(0, int(archive_size))
+        if self._archive_size <= 0:
+            self._elite_archive = []
+            return {'archive_size': 0, 'archive_best': 0.0, 'archive_best_std': 0.0}
+
+        candidates = [ind.copy() for ind in self._elite_archive]
+        for row in evaluated:
+            candidates.append(Individual(
+                id=int(row['id']),
+                weights={key: np.array(value, copy=True) for key, value in row['weights'].items()},
+                fitness=float(row['fitness']),
+                seed=int(row.get('seed', 0)),
+                hyperparams={'archive_eval_std': float(row.get('fitness_std', 0.0))},
+            ))
+        candidates.sort(key=lambda x: x.fitness, reverse=True)
+
+        unique = []
+        seen = set()
+        for ind in candidates:
+            signature = tuple(
+                (key, arr.shape, round(float(np.mean(arr)), 7), round(float(np.std(arr)), 7))
+                for key, arr in sorted(ind.weights.items())
+            )
+            if signature in seen:
+                continue
+            seen.add(signature)
+            unique.append(ind)
+            if len(unique) >= self._archive_size:
+                break
+        self._elite_archive = unique
+        return self.get_archive_stats()
+
     def restore_elite_archive(self, copies: int = 1) -> int:
         """Pin archived elites back into the active population after GA/migration."""
         if not self._elite_archive or not self.population or int(copies) <= 0:
@@ -165,10 +203,12 @@ class EAManager:
 
     def get_archive_stats(self) -> Dict[str, float]:
         if not self._elite_archive:
-            return {'archive_size': 0, 'archive_best': 0.0}
+            return {'archive_size': 0, 'archive_best': 0.0, 'archive_best_std': 0.0}
+        best = self._elite_archive[0]
         return {
             'archive_size': len(self._elite_archive),
-            'archive_best': float(self._elite_archive[0].fitness),
+            'archive_best': float(best.fitness),
+            'archive_best_std': float((best.hyperparams or {}).get('archive_eval_std', 0.0)),
         }
 
     def boost_diversity(self, immigrant_fraction: float = 0.15,

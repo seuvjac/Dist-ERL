@@ -220,6 +220,7 @@ class FederatedClient:
         )
         self._actor_eval.load_weights(weights)
         rewards = []
+        total_steps = 0
         for ep in range(num_episodes):
             reset_seed = None if seed is None else int(seed + self.seed_offset + ep)
             obs, _ = env.reset(seed=reset_seed)
@@ -237,12 +238,14 @@ class FederatedClient:
                 obs, reward, done, truncated, _ = env.step(action)
                 total += float(reward) * self.reward_scale
                 steps += 1
+            total_steps += steps
             rewards.append(total)
         env.close()
         return {
             'client_id': self.client_id,
             'fitness': float(np.mean(rewards)) if rewards else 0.0,
             'fitness_std': float(np.std(rewards)) if rewards else 0.0,
+            'total_steps': int(total_steps),
         }
 
     def local_train(
@@ -251,8 +254,11 @@ class FederatedClient:
         num_episodes: int,
         updates: int,
         seed: Optional[int] = None,
+        critic_warmup_updates: int = 0,
     ) -> Dict[str, Any]:
         self._load_weights(weights)
+        if self.algorithm == 'SAC':
+            self.actor_optimizer.state.clear()
         env = make_env(
             self.env_name,
             max_episode_steps=self.max_episode_steps,
@@ -292,7 +298,7 @@ class FederatedClient:
                 )
 
         losses = []
-        for _ in range(updates):
+        for update_idx in range(updates):
             if len(self.replay_buffer) < self.batch_size:
                 continue
             batch = self.replay_buffer.sample(self.batch_size, ea_batch_ratio=0.0)
@@ -307,6 +313,7 @@ class FederatedClient:
                     self.gamma,
                     self.tau,
                     grad_clip=10.0,
+                    update_actor=update_idx >= max(0, int(critic_warmup_updates)),
                 )
             else:
                 loss = self.policy.update(batch, self.gamma, self.tau)
@@ -333,6 +340,7 @@ class FederatedClient:
             'avg_reward': float(avg_reward),
             'total_steps': int(total_steps),
             'training_steps': int(self.training_steps),
+            'updates_applied': int(len(losses)),
             'buffer_size': int(len(self.replay_buffer)),
             'loss_mean': float(np.mean(losses)) if losses else 0.0,
             'epsilon': float(getattr(self.policy, 'exploration_epsilon', 0.0)),

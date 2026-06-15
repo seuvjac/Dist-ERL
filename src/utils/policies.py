@@ -161,6 +161,7 @@ class SACPolicy(BasePolicy):
         gamma: float,
         tau: float,
         grad_clip: float = 10.0,
+        update_actor: bool = True,
     ) -> torch.Tensor:
         """Standard SAC update: critic, actor, and temperature are optimized separately."""
         observations = torch.from_numpy(batch['observations']).float()
@@ -189,6 +190,10 @@ class SACPolicy(BasePolicy):
             max_norm=grad_clip,
         )
         critic_optimizer.step()
+
+        if not update_actor:
+            self.sync_target(tau)
+            return critic_loss.detach()
 
         critic_params = list(self.critic1.parameters()) + list(self.critic2.parameters())
         for p in critic_params:

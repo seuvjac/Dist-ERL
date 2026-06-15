@@ -109,6 +109,7 @@ FEDRL_CONTINUOUS_ENVS = [
     'Swimmer-v5',
     'Reacher-v5',
     'HalfCheetah-v5',
+    'Hopper-v5',
 ]
 
 FEDRL_HETEROGENEITY_SCENARIOS = {

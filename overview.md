@@ -8,6 +8,7 @@
 Swimmer-v5
 Reacher-v5
 HalfCheetah-v5
+Hopper-v5
 ```
 
 每个 client 拥有自己的私有环境、私有 replay buffer 和本地 SAC learner。client 之间不共享 trajectory，服务器只能接收 actor 参数、reward / fitness 等标量统计信息；critic、target critic、temperature 和 replay buffer 全部留在本地。
@@ -19,8 +20,7 @@ HalfCheetah-v5
 | `Swimmer-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 | `Reacher-v5` | continuous | body mass、joint damping、geom friction、observation/reward/action perturbation |
 | `HalfCheetah-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
-
-候选替代环境为 `Hopper-v5`。它使用 3 维 `[-1, 1]` 连续动作，需要同时学习平衡和向前运动，复杂度低于 HalfCheetah，但仍能体现 SAC 本地学习、联邦 actor 聚合和 EA 探索的差异。当前先作为 HalfCheetah 的诊断 pilot；完成同协议比较后再决定是否进入正式三环境主线。
+| `Hopper-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 
 当前在每个原始环境上定义三种异质联邦场景：
 
@@ -52,6 +52,7 @@ FedEvoSAC
 Swimmer-v5
 Reacher-v5
 HalfCheetah-v5
+Hopper-v5
 ```
 
 连续主对照组：
@@ -85,13 +86,15 @@ python -m src.main --mode fed_evo_rl --algorithm SAC --env Reacher-v5
 1. **EA population 跨 client 评估**
    - server 维护一组 actor population，每个个体只包含 `actor.*`；
    - server 将每个 actor 下发给所有 federated clients；
+   - 同一 generation 的所有个体使用相同的一组 common random seeds，避免 Reacher 随机目标或 MuJoCo 初始状态差异造成幸运个体；
    - 每个 client 在自己的本地 MDP 中 rollout 评估该 actor；
    - client 只返回 scalar fitness，不上传 trajectory；
    - server 对同一 actor 的多 client fitness 求均值，得到该个体的 federated fitness。
 
 2. **Global elite archive 更新**
-   - server 按 federated fitness 对 population 排序；
-   - 将当前高分 actor 与历史 archive 合并；
+   - server 按 generation fitness 对 population 排序；
+   - top candidates 在独立固定 validation seeds 上跨 client 复评；
+   - 只有独立复评结果可以进入历史 archive；
    - 保留 top-k actor 作为 global elite archive；
    - archive actor 是当前可部署策略候选，防止历史好策略被后续 mutation 或 RL migration 覆盖。
 
@@ -110,6 +113,7 @@ python -m src.main --mode fed_evo_rl --algorithm SAC --env Reacher-v5
    - 每隔 `K` 代，server 将当前 best / archive elite actor 下发给部分 clients；
    - client 用该 actor 初始化本地 SAC actor；
    - client rollout 产生 transition，写入私有 replay buffer；
+   - client 加载新的 server actor 后先执行少量 critic-only warm-up，再更新 actor 和 temperature，避免未校准 critic 立即破坏 elite actor；
    - client 本地训练 continuous SAC actor、critic1、critic2 和 temperature；
    - critic、target critic、temperature 和 replay buffer 始终留在本地；
    - client 只上传更新后的 actor 参数和本地 reward 摘要。
@@ -200,7 +204,7 @@ FedEvoSAC 聚合的是 client 上传的 actor 参数，不聚合 trajectory，�
 
 | 机制 | 参数 | 作用 |
 |------|------|------|
-| 间隔聚合 | `--fed-aggregation-interval 5` | 降低通信和训练开销 |
+| 每代聚合 | `--fed-aggregation-interval 1` | 短预算下保证 SAC 持续参与；长预算可调大 |
 | softmax reward 权重 | `--fed-aggregation softmax` | 高 reward client 权重更大 |
 | 温度控制 | `--fed-aggregation-temperature 75` | 防止单个 client 过度支配 |
 | 低分过滤 | `--fed-min-client-score-quantile 0.25` | 丢弃低质量 actor update |
@@ -268,9 +272,9 @@ FedAvg-DQN
 | `RobustFed-SAC-Median` | client actor 做逐参数 median 聚合，critic 保持本地 | 鲁棒聚合思想在异质 client 下是否改善稳定性 |
 | `FedEvoSAC` | continuous SAC 本地学习 + federated actor aggregation + EA actor population | EA 是否能在连续异质控制中提供更稳探索和更好 actor 多样性 |
 
-四个联邦 SAC baseline 使用相同的训练/部署分离协议。client 的训练 actor 始终继续执行本地 SAC 更新和各自的联邦聚合，不因一次评估下降而回滚；server 另外保存固定评估协议下的历史最佳 actor，作为 deployable checkpoint。主图的 `eval_reward_mean` 画可部署 checkpoint，候选策略辅助图画 `candidate_eval_mean`，因此既能避免已验证策略被覆盖，也能真实展示当前训练策略的上升、波动或失败。`deployment_rollback` 字段现在表示本轮继续保留旧 checkpoint，而不是把训练 actor 回滚。
+四个联邦 SAC baseline 使用相同的稳定聚合协议。client 先连续执行多个本地 rollout/update round，再按各自的 FedAvg、FedBest、Softmax 或 Median 规则产生 actor candidate。server 使用 `server_learning_rate` 将 candidate 与上一全局 actor 小步融合，并在固定 validation seeds 上验收；只有不降低当前全局评估回报的 candidate 才广播。critic、temperature 和 replay buffer 始终保留在 client。主图画已验收的全局 actor，candidate 辅助图画聚合候选，因此既能展示学习过程，也能避免一次不稳定聚合永久破坏策略。
 
-为避免旧实现中“每收集 1000 个 transition 只更新 4 次”的欠训练问题，baseline 按新采样量计算有限的本地 SAC 更新数：`updates = min(max(base_updates, ceil(new_steps * update_to_data_ratio)), max_updates_per_round)`。默认 `update_to_data_ratio=0.02`、上限 `20`，在不改变网络、损失函数和聚合规则的前提下，使 critic/actor 获得足够更新。联邦聚合替换 actor 参数后清空 actor optimizer 的陈旧 Adam 动量；本地 critic optimizer、temperature optimizer 和 replay buffer 全部保留。FedAvg、FedBest、FedSoftmax 和 Median 的原聚合思想保持不变。
+为避免旧实现中“每收集 1000 个 transition 只更新 4 次”的欠训练问题，baseline 按新采样量计算有限的本地 SAC 更新数：`updates = min(max(base_updates, ceil(new_steps * update_to_data_ratio)), max_updates_per_round)`。当前统一协议使用 `update_to_data_ratio=0.05`、上限 `20`。联邦聚合替换 actor 参数后清空 actor optimizer 的陈旧 Adam 动量，并执行少量 critic-only warm-up；本地 critic optimizer、temperature optimizer 和 replay buffer 全部保留。FedAvg、FedBest、FedSoftmax 和 Median 的原聚合思想保持不变。
 
 外部论文原代码复现作为单独的 external-original comparison 管理，不直接和同协议内部基线混名。原因是这些仓库支持的环境、依赖和训练协议不同；能在相同环境上运行的才放入外部复现图。外部复现结果不参与 FedEvoSAC 消融图，也不和内部同协议曲线混称为同一类 baseline。
 
@@ -296,12 +300,14 @@ FedAvg-DQN
 ./run_continuous_fedevosac_suite.sh
 ```
 
-该脚本默认使用更强的异质设定：
+当前四环境诊断主实验默认使用无异质设置，先验证算法本身的学习与聚合稳定性：
 
 ```text
-CLIENT_HETEROGENEITY=0.60
-CLIENT_HETEROGENEITY_MODE=mixed
+CLIENT_HETEROGENEITY=0.0
+CLIENT_HETEROGENEITY_MODE=none
 NUM_WORKERS=3
+SEEDS=0
+TARGET_ENV_STEPS=120000
 ```
 
 默认连续环境：
@@ -310,7 +316,10 @@ NUM_WORKERS=3
 Swimmer-v5
 Reacher-v5
 HalfCheetah-v5
+Hopper-v5
 ```
+
+为了让环境难度和运行成本尽量接近 Swimmer，无异质主实验采用环境级 horizon：`Swimmer/HalfCheetah/Hopper=200`，`Reacher=50`。四个环境使用相同的 `120000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算；Reacher 通过增加本地 rollouts 补足短 episode 的 SAC 数据，FedEvoSAC 每代执行联邦训练。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。
 
 输出三类结果：
 
@@ -397,7 +406,7 @@ python -m src.main \
 | `client_fitness_mean` | 跨 client 评估均值 |
 | `client_fitness_std` | 跨 client 评估方差 |
 | `aggregation_entropy` | 联邦聚合权重熵 |
-| `archive_best` | global elite archive 历史最佳 fitness |
+| `archive_best` | 独立固定 validation seeds 上的 global elite archive 最佳回报 |
 | `candidate_eval_mean` | 当前聚合训练 actor 的固定协议评估回报 |
 | `deployable_eval_mean` | server 历史最佳可部署 actor 的评估回报 |
 | `local_updates_per_worker` | 每轮每个 baseline client 实际执行的本地 SAC 更新数 |
@@ -410,13 +419,13 @@ python -m src.main \
 - reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
 - reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；核心证据优先放在连续 `Swimmer-v5`、`Reacher-v5` 和 `HalfCheetah-v5`。强异质结论应写成相对改善，而不是声称完全解决异质性退化。
+最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；当前连续证据来自 `Swimmer-v5`、`Reacher-v5`、`HalfCheetah-v5` 和 `Hopper-v5`。无异质结果先验证学习能力，之后再逐级加入 mild / mixed heterogeneity。
 
 ## 12. 当前实现状态
 
 已完成：
 
-- 连续环境主线：`Swimmer-v5`、`Reacher-v5`、`HalfCheetah-v5`；
+- 连续环境主线：`Swimmer-v5`、`Reacher-v5`、`HalfCheetah-v5`、`Hopper-v5`；
 - `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；
