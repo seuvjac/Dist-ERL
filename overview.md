@@ -315,7 +315,17 @@ Reacher-v5
 Hopper-v5
 ```
 
-HalfCheetah 已从主实验中移除。此前 Swimmer 从 150+ 掉到 30 左右，主要不是单纯算法退化，而是实验协议从旧的 `1000` 步 episode horizon / 更长预算切到 `200` 步 horizon / `120000` step，并且 archive 改成独立 validation 后不再记录乐观 best-so-far。新协议恢复 `Swimmer/Hopper=1000`，`Reacher=50`；三个环境使用相同的 `459000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算。Swimmer/Hopper 的 archive validation 使用轻量 `1 candidate x 1 episode`，避免长 horizon 下验证成本吃掉过多 EA generations；Reacher 仍保留更密集的短 horizon 评估。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。
+HalfCheetah 已从主实验中移除。此前 Swimmer 从 150+ 掉到 30 左右，主要不是单纯算法退化，而是实验协议从旧的 `1000` 步 episode horizon / 更长预算切到 `200` 步 horizon / `120000` step，并且 archive 改成独立 validation 后不再记录乐观 best-so-far。初版修正把 Swimmer/Hopper 恢复到 `1000` 步后仍只到 35 左右，说明另一个关键问题是高频 SAC 注入压缩了 EA 搜索：旧有效 Swimmer 更接近 `population=10`、`fed_aggregation_interval=5`、`client_updates=4` 的 EA 主导形态，而不是每代都做较强 SAC refinement。
+
+当前三环境协议因此改为：
+
+| 环境 | horizon | FedEvoSAC population | 联邦频率 | client SAC updates | archive validation |
+|------|---------|----------------------|----------|--------------------|-------------------|
+| `Swimmer-v5` | `1000` | `10` | 每 5 代 | `4` | top-2 candidates x 1 episode |
+| `Hopper-v5` | `1000` | `10` | 每 5 代 | `4` | top-2 candidates x 1 episode |
+| `Reacher-v5` | `50` | `8` | 每 1 代 | `12` | top-2 candidates x 2 episodes |
+
+三个环境使用相同的 `459000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement；短 horizon Reacher 中则允许更频繁的 SAC refinement。
 
 输出三类结果：
 
