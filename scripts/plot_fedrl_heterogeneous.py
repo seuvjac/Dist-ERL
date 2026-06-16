@@ -26,6 +26,8 @@ def parse_args():
                    help='Optional x-axis cap after x-axis conversion')
     p.add_argument('--target-x', type=float, default=None,
                    help='Force every method in each plot to extend to this x value, holding the final return')
+    p.add_argument('--align-start', action='store_true',
+                   help='Shift each run so its first logged x value is plotted at zero')
     p.add_argument('--metric', default='current', choices=['current', 'candidate', 'best'],
                    help='current uses deployable eval; candidate uses the current training policy; best uses optimistic archive metrics')
     return p.parse_args()
@@ -145,6 +147,15 @@ def main():
         log_dirs.append(args.dqn_log_dir)
     runs = load_runs(
         log_dirs, plot_kind=args.plot_kind, x_axis=args.x_axis, metric=args.metric)
+    if args.align_start:
+        shifted = []
+        for run in runs:
+            if len(run['x']) < 1:
+                continue
+            run = dict(run)
+            run['x'] = run['x'] - run['x'][0]
+            shifted.append(run)
+        runs = shifted
     if args.max_x is not None:
         capped = []
         for run in runs:
@@ -210,6 +221,8 @@ def main():
             xlabel = 'Training progress (%)'
         elif args.x_axis == 'round':
             xlabel = 'Communication round / generation'
+        elif args.align_start:
+            xlabel = 'Environment steps since first logged evaluation'
         else:
             xlabel = 'Environment steps'
         ax.set_xlabel(xlabel)
