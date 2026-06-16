@@ -190,9 +190,14 @@ def main():
         for label in labels:
             group = [r for r in env_runs if r['label'] == label]
             xs = np.linspace(0, plot_max_x, 100)
-            mat = np.vstack([np.interp(xs, r['x'], r['y']) for r in group])
-            y = mat.mean(axis=0)
-            s = mat.std(axis=0)
+            interpolated = []
+            for run in group:
+                vals = np.interp(xs, run['x'], run['y'])
+                vals[xs < run['x'][0]] = np.nan
+                interpolated.append(vals)
+            mat = np.vstack(interpolated)
+            y = np.nanmean(mat, axis=0)
+            s = np.nanstd(mat, axis=0)
             ax.plot(xs, y, label=f"{label} (n={len(group)})", color=colors.get(label), linewidth=2)
             if len(group) > 1:
                 ax.fill_between(xs, y - s, y + s, color=colors.get(label), alpha=0.14)
