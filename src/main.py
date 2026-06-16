@@ -982,7 +982,8 @@ def _generate_training_plot(total_steps, rewards, rl_steps, env_name, mode):
         ax2.grid(True, alpha=0.3)
         plt.tight_layout()
         os.makedirs('plots', exist_ok=True)
-        path = f'plots/training_{mode}_{env_name}_{int(time.time())}.png'
+        os.makedirs('plots/training', exist_ok=True)
+        path = f'plots/training/training_{mode}_{env_name}_{int(time.time())}.png'
         plt.savefig(path, dpi=150, bbox_inches='tight')
         print(f"Training plot: {path}")
         plt.close()

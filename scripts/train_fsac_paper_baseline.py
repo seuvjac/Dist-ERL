@@ -99,7 +99,7 @@ def parse_args():
                             'env_params_only', 'mixed'])
     p.add_argument('--eval-interval', type=int, default=5)
     p.add_argument('--eval-episodes', type=int, default=5)
-    p.add_argument('--log-dir', default='logs_fsac_paper')
+    p.add_argument('--log-dir', default='logs/logs_fsac_paper')
     p.add_argument('--exp-name', default=None)
     p.add_argument('--baseline-mode', default=None,
                    choices=['paper_sac', 'paper_fsac',

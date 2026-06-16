@@ -5,7 +5,7 @@ source "$HOME/anaconda3/etc/profile.d/conda.sh"
 conda activate dist-erl-re2
 cd "$HOME/code/Dist-ERL"
 
-mkdir -p logs_compare
+mkdir -p logs/logs_compare
 
 for mode in pure_rl pure_ea dist_erl erl_re2 fed_evo_rl; do
   for seed in 0 1 2; do
@@ -25,7 +25,7 @@ for mode in pure_rl pure_ea dist_erl erl_re2 fed_evo_rl; do
       --batch-size 32 \
       --rl-rollouts 1 \
       --rl-rollouts-between-sync 1 \
-      --log-dir ./logs_compare \
+      --log-dir ./logs/logs_compare \
       --exp-name "codex_cmp_hopper_${mode}_s${seed}"
   done
 done

@@ -61,7 +61,7 @@ def parse_args():
                             'env_params_only', 'mixed'])
     p.add_argument('--eval-interval', type=int, default=5)
     p.add_argument('--eval-episodes', type=int, default=5)
-    p.add_argument('--log-dir', default='logs_dqn_fedrl')
+    p.add_argument('--log-dir', default='logs/logs_dqn_fedrl')
     p.add_argument('--exp-name', default=None)
     return p.parse_args()
 

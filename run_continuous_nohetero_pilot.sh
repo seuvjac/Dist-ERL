@@ -12,8 +12,8 @@ CLIENT_HETEROGENEITY=${CLIENT_HETEROGENEITY:-"0.0"}
 CLIENT_HETEROGENEITY_MODE=${CLIENT_HETEROGENEITY_MODE:-"none"}
 BUDGET_PRESET=${BUDGET_PRESET:-"reduced"}
 
-LOG_DIR=${LOG_DIR:-"logs_fedevosac_continuous_nohetero_pilot"}
-SAC_LOG_DIR=${SAC_LOG_DIR:-"logs_sac_continuous_nohetero_pilot"}
+LOG_DIR=${LOG_DIR:-"logs/logs_fedevosac_continuous_nohetero_pilot"}
+SAC_LOG_DIR=${SAC_LOG_DIR:-"logs/logs_sac_continuous_nohetero_pilot"}
 COMPARISON_OUT_DIR=${COMPARISON_OUT_DIR:-"plots/fedevosac_continuous_nohetero_pilot"}
 ABLATION_OUT_DIR=${ABLATION_OUT_DIR:-"plots/fedevosac_continuous_nohetero_pilot_ablations"}
 SUMMARY_OUT_DIR=${SUMMARY_OUT_DIR:-"plots/fedevosac_continuous_nohetero_pilot_tables"}

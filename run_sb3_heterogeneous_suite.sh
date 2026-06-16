@@ -8,7 +8,7 @@ export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 ENVS=${ENVS:-"CartPole-v1 MountainCar-v0 Acrobot-v1 LunarLander-v3"}
 SEEDS=${SEEDS:-"0 1 2"}
 SB3_ALGOS=${SB3_ALGOS:-"PPO"}
-SB3_LOG_DIR=${SB3_LOG_DIR:-"logs_sb3"}
+SB3_LOG_DIR=${SB3_LOG_DIR:-"logs/logs_sb3"}
 
 for ENV_NAME in $ENVS; do
   read _POP _CLIENTS GENS STEPS <<<"$(python3 - <<PY
@@ -35,6 +35,6 @@ PY
 done
 
 python3 scripts/plot_fedrl_heterogeneous.py \
-  --fed-log-dir logs_fedrl_smoke \
+  --fed-log-dir logs/logs_fedrl_smoke \
   --sb3-log-dir "$SB3_LOG_DIR" \
   --out-dir plots/sb3_heterogeneous

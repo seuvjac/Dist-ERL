@@ -47,7 +47,7 @@ def parse_args():
                             'env_params_only', 'mixed'])
     p.add_argument('--eval-interval', type=int, default=5)
     p.add_argument('--eval-episodes', type=int, default=3)
-    p.add_argument('--log-dir', default='logs_sac_continuous')
+    p.add_argument('--log-dir', default='logs/logs_sac_continuous')
     p.add_argument('--exp-name', default=None)
     p.add_argument('--baseline-mode', default='independent_sac',
                    choices=['independent_sac', 'fedavg_sac', 'fedbest_sac',

@@ -20,9 +20,9 @@ except ModuleNotFoundError:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--fed-log-dir', default='logs_fedrl_hetero_mixed')
-    p.add_argument('--paper-log-dir', default='logs_fsac_paper_mixed')
-    p.add_argument('--dqn-log-dir', default='logs_dqn_fedrl_mixed')
+    p.add_argument('--fed-log-dir', default='logs/logs_fedrl_hetero_mixed')
+    p.add_argument('--paper-log-dir', default='logs/logs_fsac_paper_mixed')
+    p.add_argument('--dqn-log-dir', default='logs/logs_dqn_fedrl_mixed')
     p.add_argument('--out-dir', default='plots/fedrl_tables_mixed')
     p.add_argument('--plot-kind', default='comparison', choices=['comparison', 'ablation', 'all'])
     p.add_argument('--envs', nargs='*', default=['CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3'])

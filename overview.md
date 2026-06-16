@@ -342,6 +342,16 @@ plots/fedevosac_continuous_ablations_round    # FedEvoSAC 内部消融
 plots/fedevosac_continuous_tables             # final / best return 表格
 ```
 
+日志与图表目录约定：
+
+```text
+logs/                 # 所有 metrics、metadata、shell run log
+logs/run/             # 后台/脚本 stdout 日志
+plots/                # 所有对比图、消融图、表格
+plots/training/       # src.main 生成的单次训练过程图
+plots/tables/         # 零散 summary / significance CSV
+```
+
 默认连续对照组为 `FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median` 和 `FedEvoSAC`；这些 baseline 基于本项目已有联邦 RL 复现框架迁移到 continuous SAC，共享同一环境异质性、评估、日志和 actor 聚合协议。
 
 三种异质联邦场景脚本仍可用于离散附线分析：
@@ -387,7 +397,7 @@ BUDGET_PRESET=full ./run_continuous_fedevosac_suite.sh
 ./run_external_original_baselines.sh
 ```
 
-该脚本只调用 `/home/ywj/code` 下的外部仓库，并把输出整理到 `external_original_logs/`。它依赖外部仓库自己的 Python/Gym/PyTorch 版本；如果当前 conda 环境不兼容，应单独建对应环境后用 `EXTERNAL_PYTHON=/path/to/python ./run_external_original_baselines.sh` 运行。
+该脚本只调用 `/home/ywj/code` 下的外部仓库，并把输出整理到 `logs/external_original_logs/`。它依赖外部仓库自己的 Python/Gym/PyTorch 版本；如果当前 conda 环境不兼容，应单独建对应环境后用 `EXTERNAL_PYTHON=/path/to/python ./run_external_original_baselines.sh` 运行。
 
 快速 smoke：
 

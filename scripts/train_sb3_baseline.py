@@ -41,7 +41,7 @@ def parse_args():
     p.add_argument('--eval-interval', type=int, default=5000)
     p.add_argument('--eval-episodes', type=int, default=5)
     p.add_argument('--max-episode-steps', type=int, default=1000)
-    p.add_argument('--log-dir', default='logs_sb3')
+    p.add_argument('--log-dir', default='logs/logs_sb3')
     p.add_argument('--exp-name', default=None)
     return p.parse_args()
 

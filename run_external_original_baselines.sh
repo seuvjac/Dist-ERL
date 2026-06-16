@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 EXTERNAL_PYTHON=${EXTERNAL_PYTHON:-python3}
-OUT_ROOT=${OUT_ROOT:-"$PWD/external_original_logs"}
+OUT_ROOT=${OUT_ROOT:-"$PWD/logs/external_original_logs"}
 FED_DRL_REPO=${FED_DRL_REPO:-"/home/ywj/code/Federated-DRL"}
 FEDPG_REPO=${FEDPG_REPO:-"/home/ywj/code/Byzantine-Federated-RL"}
 RUN_FEDERATED_DRL=${RUN_FEDERATED_DRL:-1}

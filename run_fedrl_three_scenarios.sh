@@ -9,7 +9,7 @@ ENVS=${ENVS:-"CartPole-v1 MountainCar-v0 Acrobot-v1 LunarLander-v3"}
 SCENARIOS=${SCENARIOS:-"dynamics_mild sensor_reward mixed_hard"}
 SEEDS=${SEEDS:-"0 1 2"}
 FED_VARIANTS=${FED_VARIANTS:-"full"}
-LOG_ROOT=${LOG_ROOT:-"logs_fedrl_scenarios"}
+LOG_ROOT=${LOG_ROOT:-"logs/logs_fedrl_scenarios"}
 OUT_DIR=${OUT_DIR:-"plots/fedrl_scenarios"}
 ALG=${FED_ALGORITHM:-"FSAC"}
 

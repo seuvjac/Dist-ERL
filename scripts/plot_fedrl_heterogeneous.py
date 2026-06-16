@@ -12,9 +12,9 @@ import numpy as np
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--fed-log-dir', default='logs_fedrl_hetero')
-    p.add_argument('--paper-log-dir', default='logs_fsac_paper')
-    p.add_argument('--dqn-log-dir', default='logs_dqn_fedrl')
+    p.add_argument('--fed-log-dir', default='logs/logs_fedrl_hetero')
+    p.add_argument('--paper-log-dir', default='logs/logs_fsac_paper')
+    p.add_argument('--dqn-log-dir', default='logs/logs_dqn_fedrl')
     p.add_argument('--out-dir', default='plots/fedrl_heterogeneous')
     p.add_argument('--envs', nargs='*', default=None)
     p.add_argument('--plot-kind', default='comparison',

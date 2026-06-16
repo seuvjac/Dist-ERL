@@ -14,7 +14,7 @@ from src.config import FEDRL_HETEROGENEITY_SCENARIOS
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--log-root', default='logs_fedrl_scenarios')
+    p.add_argument('--log-root', default='logs/logs_fedrl_scenarios')
     p.add_argument('--out-dir', default='plots/fedrl_scenarios')
     p.add_argument('--envs', nargs='*', default=['CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3'])
     p.add_argument('--variant', default='full')
