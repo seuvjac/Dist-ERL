@@ -34,6 +34,7 @@ FED_ABLATION_UNIFORM_AGG = 'uniform_aggregation'
 FED_ABLATION_NO_LOCAL_RL = 'no_local_rl'
 FED_ABLATION_NO_EA_INJECTION = 'no_ea_injection'
 FED_ABLATION_NO_HETEROGENEITY = 'no_heterogeneity'
+FED_ABLATION_RAW_SOFTMAX = 'raw_softmax'
 
 FED_ABLATION_CHOICES = (
     FED_ABLATION_FULL,
@@ -41,6 +42,7 @@ FED_ABLATION_CHOICES = (
     FED_ABLATION_NO_LOCAL_RL,
     FED_ABLATION_NO_EA_INJECTION,
     FED_ABLATION_NO_HETEROGENEITY,
+    FED_ABLATION_RAW_SOFTMAX,
 )
 
 MODE_LABELS = {
@@ -58,6 +60,7 @@ FED_ABLATION_LABELS = {
     FED_ABLATION_NO_LOCAL_RL: 'w/o local RL updates',
     FED_ABLATION_NO_EA_INJECTION: 'w/o EA injection',
     FED_ABLATION_NO_HETEROGENEITY: 'IID clients',
+    FED_ABLATION_RAW_SOFTMAX: 'raw reward softmax',
 }
 
 MODE_COLORS = {
@@ -86,6 +89,7 @@ PLOT_STYLES = {
     f'{FED_EVO_RL}__{FED_ABLATION_NO_LOCAL_RL}': {'color': '#009E73', 'ls': '-.', 'lw': 2.8, 'marker': 's', 'markevery': 10},
     f'{FED_EVO_RL}__{FED_ABLATION_NO_EA_INJECTION}': {'color': '#E69F00', 'ls': ':', 'lw': 3.0, 'marker': '^', 'markevery': 10},
     f'{FED_EVO_RL}__{FED_ABLATION_NO_HETEROGENEITY}': {'color': '#CC79A7', 'ls': '-', 'lw': 2.8, 'marker': 'D', 'markevery': 10},
+    f'{FED_EVO_RL}__{FED_ABLATION_RAW_SOFTMAX}': {'color': '#882255', 'ls': '--', 'lw': 2.8, 'marker': 'v', 'markevery': 10},
 }
 
 # Six MuJoCo continuous control tasks (Todorov et al., 2012), Gymnasium *-v2 IDs

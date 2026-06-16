@@ -174,6 +174,8 @@ def main():
         'FedEvoFSAC-no_local_rl': '#009E73',
         'FedEvoFSAC-no_ea_injection': '#E69F00',
         'FedEvoFSAC-no_heterogeneity': '#CC79A7',
+        'FedEvoFSAC-raw_softmax': '#882255',
+        'FedEvoSAC-raw_softmax': '#882255',
         'Paper-FSAC': '#56B4E9',
         'Paper-SAC': '#999999',
         'Independent-SAC': '#999999',

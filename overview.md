@@ -117,7 +117,8 @@ python -m src.main --mode fed_evo_rl --algorithm SAC --env Reacher-v5
 
 6. **联邦 actor 聚合**
    - server 对 client 上传的 actor update 做 reward-aware aggregation；
-   - 默认使用 softmax 权重、低分 client 过滤和 delta norm clipping；
+   - 默认使用 normalized relative softmax 权重、低分 client 过滤和 delta norm clipping；
+   - 每个 client 维护本地 reward EMA / std，聚合分数使用相对提升 `(reward_i - EMA_i) / std_i`，避免 reward scale 大的 client 天然支配聚合；
    - 聚合时以当前 best actor 为中心聚合 delta，避免直接平均完整 actor 造成大幅漂移。
 
 7. **RL-to-EA soft injection 和 deployable policy**
@@ -203,8 +204,10 @@ FedEvoSAC 聚合的是 client 上传的 actor 参数，不聚合 trajectory，�
 | 机制 | 参数 | 作用 |
 |------|------|------|
 | 每代聚合 | `--fed-aggregation-interval 1` | 短预算下保证 SAC 持续参与；长预算可调大 |
-| softmax reward 权重 | `--fed-aggregation softmax` | 高 reward client 权重更大 |
+| normalized relative softmax | `--fed-score-normalization relative_gain` | 用 client 相对提升而不是 raw reward 计算聚合权重 |
 | 温度控制 | `--fed-aggregation-temperature 75` | 防止单个 client 过度支配 |
+| reward scale EMA | `--fed-score-ema-beta 0.90` | 维护每个 client 的 reward baseline / scale |
+| raw softmax 消融 | `--fed-ablation raw_softmax` | 保留原始 reward softmax，用于验证归一化聚合贡献 |
 | 低分过滤 | `--fed-min-client-score-quantile 0.25` | 丢弃低质量 actor update |
 | delta clipping | `--fed-delta-clip-norm 5` | 限制 client update 的参数步长 |
 | soft injection | `--migration-blend 0.35` | 将聚合 actor 软注入 EA 弱个体 |
@@ -217,6 +220,8 @@ theta_fed = theta_best + sum_i w_i * delta_i
 ```
 
 这比直接平均完整 actor 更稳。
+
+默认 `FedEvoSAC-full` 使用 normalized relative softmax。`FedEvoSAC-raw_softmax` 作为消融保留旧版 raw reward softmax，用来回答：在 client reward scale 异质时，按相对提升归一化是否比直接用 episodic return 更稳定。
 
 ## 9. Baseline 和对比曲线
 
@@ -238,6 +243,7 @@ FedEvoSAC-uniform_aggregation
 FedEvoSAC-no_local_rl
 FedEvoSAC-no_ea_injection
 FedEvoSAC-no_heterogeneity
+FedEvoSAC-raw_softmax
 ```
 
 离散附线仍可使用原来的 FSAC / DQN 对照：
@@ -412,6 +418,8 @@ python -m src.main \
 | `client_fitness_mean` | 跨 client 评估均值 |
 | `client_fitness_std` | 跨 client 评估方差 |
 | `aggregation_entropy` | 联邦聚合权重熵 |
+| `aggregation_score_mean` | 进入聚合 softmax 的归一化 client score 均值 |
+| `aggregation_score_std` | 进入聚合 softmax 的归一化 client score 方差 |
 | `archive_best` | 独立固定 validation seeds 上的 global elite archive 最佳回报 |
 | `candidate_eval_mean` | 当前聚合训练 actor 的固定协议评估回报 |
 | `deployable_eval_mean` | server 历史最佳可部署 actor 的评估回报 |
@@ -436,7 +444,7 @@ python -m src.main \
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；
 - GA actor 前缀可配置且当前固定为 `actor.`；
-- reward-aware federated actor aggregation；
+- normalized relative reward-aware federated actor aggregation；
 - delta clipping 与 bounded EA mutation；
 - global elite archive；
 - FedEvoSAC 连续对比和消融脚本；
@@ -446,6 +454,6 @@ python -m src.main \
 
 - 连续控制环境训练方差更大，Hopper 仍需要更长预算和多 seed 统计；
 - actor-only 共享更稳，但 client critic 完全本地化，早期本地更新可能噪声较大；
-- 异质 client reward scale 会影响 softmax 聚合权重，需要关注 `aggregation_entropy`；
+- raw reward softmax 容易受异质 client reward scale 影响；当前 full 已改用 normalized relative softmax，但仍需要通过 `raw_softmax` 消融、`aggregation_entropy` 和 `aggregation_score_std` 验证稳定性；
 - MuJoCo 异质性过强时会改变最优动作尺度，EA mutation、action noise 和 SAC temperature 需要联动调参；
 - 当前 privacy 是 trajectory-private，不是 differential privacy 或 secure aggregation。

@@ -29,6 +29,9 @@ BASELINE_SERVER_LEARNING_RATE=${BASELINE_SERVER_LEARNING_RATE:-"0.25"}
 FED_INJECT_MARGIN=${FED_INJECT_MARGIN:-"-0.05"}
 FED_EA_MUTATION_PROB=${FED_EA_MUTATION_PROB:-"0.90"}
 FED_EA_RESET_PROB=${FED_EA_RESET_PROB:-"0.05"}
+FED_SCORE_NORMALIZATION=${FED_SCORE_NORMALIZATION:-"relative_gain"}
+FED_SCORE_EMA_BETA=${FED_SCORE_EMA_BETA:-"0.90"}
+FED_SCORE_MIN_STD=${FED_SCORE_MIN_STD:-"1.0"}
 
 for ENV_NAME in $ENVS; do
   read POP CLIENTS GENS STEPS <<<"$(python3 - <<PY
@@ -104,6 +107,9 @@ PY
         --fed-aggregation softmax \
         --fed-aggregation-interval "$FED_AGG_INTERVAL" \
         --fed-aggregation-temperature 75 \
+        --fed-score-normalization "$FED_SCORE_NORMALIZATION" \
+        --fed-score-ema-beta "$FED_SCORE_EMA_BETA" \
+        --fed-score-min-std "$FED_SCORE_MIN_STD" \
         --fed-inject-margin "$FED_INJECT_MARGIN" \
         --fed-delta-clip-norm 5 \
         --ea-mutation-prob "$FED_EA_MUTATION_PROB" \

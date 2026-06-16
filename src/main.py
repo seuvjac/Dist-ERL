@@ -24,6 +24,7 @@ from src.config import (
     FED_ABLATION_NO_EA_INJECTION,
     FED_ABLATION_NO_HETEROGENEITY,
     FED_ABLATION_NO_LOCAL_RL,
+    FED_ABLATION_RAW_SOFTMAX,
     FED_ABLATION_UNIFORM_AGG,
     FED_EVO_RL,
     RE2_MODES,
@@ -57,6 +58,7 @@ METRIC_FIELDS = [
     'federated_warm_start', 'migration_copies',
     'client_reward_mean', 'client_reward_std', 'client_fitness_mean',
     'client_fitness_std', 'selected_clients', 'aggregation_entropy',
+    'aggregation_score_mean', 'aggregation_score_std',
     'fed_round_applied', 'archive_best', 'archive_size',
     'deployable_eval_mean', 'deployable_eval_std',
     'aggregation_temperature', 'deployment_rollback', 'deployment_rollback_count',
@@ -101,6 +103,13 @@ def parse_args():
                         help='Run federated local train/aggregation every K generations')
     parser.add_argument('--fed-aggregation-temperature', type=float, default=75.0,
                         help='Softmax temperature for fitness-weighted client aggregation')
+    parser.add_argument('--fed-score-normalization', type=str, default='relative_gain',
+                        choices=['raw', 'batch_zscore', 'relative_gain'],
+                        help='Normalize client rewards before reward-aware aggregation')
+    parser.add_argument('--fed-score-ema-beta', type=float, default=0.9,
+                        help='EMA beta for per-client reward baseline in relative_gain aggregation')
+    parser.add_argument('--fed-score-min-std', type=float, default=1.0,
+                        help='Minimum per-client reward std used by relative_gain aggregation')
     parser.add_argument('--fed-min-client-score-quantile', type=float, default=0.25,
                         help='Drop selected client uploads below this reward quantile before aggregation')
     parser.add_argument('--fed-delta-clip-norm', type=float, default=5.0,
@@ -222,6 +231,9 @@ def _setup_local_logger(args):
         'fed_aggregation': args.fed_aggregation,
         'fed_aggregation_interval': args.fed_aggregation_interval,
         'fed_aggregation_temperature': args.fed_aggregation_temperature,
+        'fed_score_normalization': args.fed_score_normalization,
+        'fed_score_ema_beta': args.fed_score_ema_beta,
+        'fed_score_min_std': args.fed_score_min_std,
         'fed_min_client_score_quantile': args.fed_min_client_score_quantile,
         'fed_delta_clip_norm': args.fed_delta_clip_norm,
         'fed_inject_margin': args.fed_inject_margin,
@@ -299,6 +311,56 @@ def _apply_fed_ablation_args(args) -> None:
     elif args.fed_ablation == FED_ABLATION_NO_HETEROGENEITY:
         args.client_heterogeneity = 0.0
         args.client_heterogeneity_mode = 'none'
+    elif args.fed_ablation == FED_ABLATION_RAW_SOFTMAX:
+        args.fed_aggregation = 'softmax'
+        args.fed_score_normalization = 'raw'
+
+
+def _aggregation_scores_from_rewards(
+    client_indices,
+    rewards,
+    reward_mean,
+    reward_var,
+    reward_seen,
+    mode: str,
+    ema_beta: float,
+    min_std: float,
+):
+    """Return aggregation scores and update per-client reward scale statistics."""
+    if not rewards:
+        return []
+    raw = np.asarray(rewards, dtype=np.float64)
+    indices = [int(i) for i in client_indices]
+    mode = str(mode)
+    if mode == 'raw':
+        scores = raw.copy()
+    elif mode == 'batch_zscore':
+        scores = (raw - raw.mean()) / (raw.std() + 1e-8)
+    else:
+        vals = []
+        floor = max(1e-8, float(min_std))
+        for idx, reward in zip(indices, raw):
+            if reward_seen[idx] > 0:
+                scale = max(floor, float(np.sqrt(max(reward_var[idx], 0.0))))
+                vals.append((float(reward) - float(reward_mean[idx])) / scale)
+            else:
+                vals.append(0.0)
+        scores = np.asarray(vals, dtype=np.float64)
+
+    beta = float(np.clip(ema_beta, 0.0, 0.999))
+    floor_var = max(1e-8, float(min_std) ** 2)
+    for idx, reward in zip(indices, raw):
+        reward = float(reward)
+        if reward_seen[idx] <= 0:
+            reward_mean[idx] = reward
+            reward_var[idx] = floor_var
+            reward_seen[idx] = 1
+            continue
+        prev_mean = float(reward_mean[idx])
+        reward_mean[idx] = beta * prev_mean + (1.0 - beta) * reward
+        reward_var[idx] = beta * float(reward_var[idx]) + (1.0 - beta) * (reward - prev_mean) ** 2
+        reward_seen[idx] += 1
+    return [float(x) for x in scores]
 
 
 def _run_fed_evo_rl(args, env_info, metrics_path):
@@ -347,6 +409,11 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
     selected_count = max(1, int(round(args.num_clients * np.clip(args.client_fraction, 0.0, 1.0))))
     last_client_reward_mean = 0.0
     last_client_reward_std = 0.0
+    last_aggregation_score_mean = 0.0
+    last_aggregation_score_std = 0.0
+    client_reward_ema = np.zeros(args.num_clients, dtype=np.float64)
+    client_reward_var = np.ones(args.num_clients, dtype=np.float64) * max(1e-8, args.fed_score_min_std ** 2)
+    client_reward_seen = np.zeros(args.num_clients, dtype=np.int64)
     cumulative_rl_updates = 0
 
     generation = 0
@@ -421,12 +488,22 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             train_results = ray.get(train_refs)
         client_rewards = [r['avg_reward'] for r in train_results]
         client_weights = [r['weights'] for r in train_results]
+        aggregation_scores = _aggregation_scores_from_rewards(
+            client_indices,
+            client_rewards,
+            client_reward_ema,
+            client_reward_var,
+            client_reward_seen,
+            args.fed_score_normalization,
+            args.fed_score_ema_beta,
+            args.fed_score_min_std,
+        ) if client_rewards else []
         if client_rewards:
             q = float(np.clip(args.fed_min_client_score_quantile, 0.0, 1.0))
-            min_score = float(np.quantile(client_rewards, q)) if len(client_rewards) > 1 else None
+            min_score = float(np.quantile(aggregation_scores, q)) if len(aggregation_scores) > 1 else None
             aggregated = aggregate_weight_dicts(
                 client_weights,
-                client_rewards,
+                aggregation_scores,
                 mode=args.fed_aggregation,
                 temperature=args.fed_aggregation_temperature,
                 min_score=min_score,
@@ -478,9 +555,15 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             client_reward_std = float(np.std(client_rewards))
             last_client_reward_mean = client_reward_mean
             last_client_reward_std = client_reward_std
+            aggregation_score_mean = float(np.mean(aggregation_scores)) if aggregation_scores else 0.0
+            aggregation_score_std = float(np.std(aggregation_scores)) if aggregation_scores else 0.0
+            last_aggregation_score_mean = aggregation_score_mean
+            last_aggregation_score_std = aggregation_score_std
         else:
             client_reward_mean = last_client_reward_mean
             client_reward_std = last_client_reward_std
+            aggregation_score_mean = last_aggregation_score_mean
+            aggregation_score_std = last_aggregation_score_std
         client_fitness_values = [r['fitness'] for r in eval_results]
         deployable_eval_mean = float(stats.get('archive_best', stats.get('max_fitness', 0.0)))
         deployable_eval_std = float(stats.get('archive_best_std', 0.0))
@@ -516,10 +599,12 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             'client_fitness_std': float(np.std(client_fitness_values)) if client_fitness_values else 0.0,
             'selected_clients': selected_count if fed_round_applied else 0,
             'aggregation_entropy': weight_entropy(
-                client_rewards,
+                aggregation_scores,
                 mode=args.fed_aggregation,
                 temperature=args.fed_aggregation_temperature,
-            ) if client_rewards else 0.0,
+            ) if aggregation_scores else 0.0,
+            'aggregation_score_mean': aggregation_score_mean,
+            'aggregation_score_std': aggregation_score_std,
             'fed_round_applied': fed_round_applied,
             'archive_best': stats.get('archive_best', 0.0),
             'archive_size': stats.get('archive_size', 0),
@@ -538,7 +623,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             f"Gen {generation}: deploy={deployable_eval_mean:.2f}, "
             f"fed_rollout={client_reward_mean:.2f} +/- {client_reward_std:.2f}, "
             f"ea_best={stats['max_fitness']:.2f}, diversity={stats.get('weight_diversity', 0.0):.3f}, "
-            f"clients={selected_count}/{args.num_clients}, agg={args.fed_aggregation}"
+            f"clients={selected_count}/{args.num_clients}, agg={args.fed_aggregation}/{args.fed_score_normalization}"
         )
         if args.wandb:
             import wandb
