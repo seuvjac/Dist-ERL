@@ -90,7 +90,6 @@ PLOT_STYLES = {
 
 # Six MuJoCo continuous control tasks (Todorov et al., 2012), Gymnasium *-v2 IDs
 MUJOCO_V2_ENVS = [
-    'HalfCheetah-v2',
     'Swimmer-v2',
     'Hopper-v2',
     'Ant-v2',
@@ -108,7 +107,6 @@ FEDRL_HETEROGENEOUS_ENVS = [
 FEDRL_CONTINUOUS_ENVS = [
     'Swimmer-v5',
     'Reacher-v5',
-    'HalfCheetah-v5',
     'Hopper-v5',
 ]
 
@@ -137,10 +135,6 @@ FEDRL_HETEROGENEITY_SCENARIOS = {
 def env_run_preset(env_id: str) -> dict:
     """Per-task defaults for distributed runs (population, workers, horizon)."""
     presets = {
-        'HalfCheetah-v2': {
-            'population_size': 50, 'num_workers': 8,
-            'max_generations': 200, 'max_episode_steps': 1000,
-        },
         'Swimmer-v2': {
             'population_size': 40, 'num_workers': 4,
             'max_generations': 200, 'max_episode_steps': 1000,
@@ -189,10 +183,6 @@ def env_run_preset(env_id: str) -> dict:
             'population_size': 24, 'num_workers': 4,
             'max_generations': 80, 'max_episode_steps': 1600,
         },
-        'HalfCheetah-v5': {
-            'population_size': 24, 'num_workers': 4,
-            'max_generations': 80, 'max_episode_steps': 1000,
-        },
         'Hopper-v5': {
             'population_size': 24, 'num_workers': 4,
             'max_generations': 80, 'max_episode_steps': 1000,
@@ -214,9 +204,8 @@ def _bench_entry(env_id: str, short: str, note: str) -> dict:
     }
 
 
-# Primary paper environments: 6× MuJoCo-v2 + lightweight debug envs
+# Primary paper environments: MuJoCo-v2 + lightweight debug envs
 BENCHMARK_ENVS = [
-    _bench_entry('HalfCheetah-v2', 'HalfCheetah', 'MuJoCo v2 (main)'),
     _bench_entry('Swimmer-v2', 'Swimmer', 'MuJoCo v2 (main)'),
     _bench_entry('Hopper-v2', 'Hopper', 'MuJoCo v2 (main)'),
     _bench_entry('Ant-v2', 'Ant', 'MuJoCo v2 (main)'),

@@ -5,8 +5,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 
-ENVS=${ENVS:-"Swimmer-v5 Reacher-v5 HalfCheetah-v5 Hopper-v5"}
-SEEDS=${SEEDS:-"0 1 2"}
+ENVS=${ENVS:-"Swimmer-v5 Reacher-v5 Hopper-v5"}
+SEEDS=${SEEDS:-"0"}
 FED_VARIANTS=${FED_VARIANTS:-"full"}
 SAC_BASELINES=${SAC_BASELINES:-"fedavg_sac fedbest_sac fedsoftmax_sac_noea fedmedian_sac"}
 LOG_DIR=${LOG_DIR:-"logs_fedevosac_continuous_mixed"}
@@ -20,12 +20,15 @@ PLOT_METRIC=${PLOT_METRIC:-"current"}
 CLIENT_HETEROGENEITY=${CLIENT_HETEROGENEITY:-"0.0"}
 CLIENT_HETEROGENEITY_MODE=${CLIENT_HETEROGENEITY_MODE:-"none"}
 BUDGET_PRESET=${BUDGET_PRESET:-"reduced"}
-TARGET_ENV_STEPS=${TARGET_ENV_STEPS:-"120000"}
+TARGET_ENV_STEPS=${TARGET_ENV_STEPS:-"459000"}
 BASELINE_UPDATE_TO_DATA_RATIO=${BASELINE_UPDATE_TO_DATA_RATIO:-"0.05"}
 BASELINE_MAX_UPDATES_PER_ROUND=${BASELINE_MAX_UPDATES_PER_ROUND:-"20"}
 BASELINE_BASE_UPDATES=${BASELINE_BASE_UPDATES:-"4"}
 BASELINE_AGGREGATION_INTERVAL=${BASELINE_AGGREGATION_INTERVAL:-"5"}
 BASELINE_SERVER_LEARNING_RATE=${BASELINE_SERVER_LEARNING_RATE:-"0.25"}
+FED_INJECT_MARGIN=${FED_INJECT_MARGIN:-"-0.10"}
+FED_EA_MUTATION_PROB=${FED_EA_MUTATION_PROB:-"0.95"}
+FED_EA_RESET_PROB=${FED_EA_RESET_PROB:-"0.08"}
 
 for ENV_NAME in $ENVS; do
   read POP CLIENTS GENS STEPS <<<"$(python3 - <<PY
@@ -56,11 +59,13 @@ PY
       CLIENT_UPDATES=${FED_CLIENT_UPDATES:-12}
       CLIENT_CRITIC_WARMUP=${FED_CLIENT_CRITIC_WARMUP:-6}
       ;;
-    Swimmer-v5|HalfCheetah-v5|Hopper-v5)
-      STEPS=${FED_MAX_EPISODE_STEPS:-200}
-      CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-2}
+    Swimmer-v5|Hopper-v5)
+      STEPS=${FED_MAX_EPISODE_STEPS:-1000}
+      CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-1}
       CLIENT_UPDATES=${FED_CLIENT_UPDATES:-20}
       CLIENT_CRITIC_WARMUP=${FED_CLIENT_CRITIC_WARMUP:-8}
+      ARCHIVE_EVAL_CANDIDATES=${FED_ARCHIVE_EVAL_CANDIDATES:-1}
+      ARCHIVE_EVAL_EPISODES=${FED_ARCHIVE_EVAL_EPISODES:-1}
       ;;
   esac
   CLIENTS=${FED_NUM_CLIENTS:-3}
@@ -96,7 +101,10 @@ PY
         --fed-aggregation softmax \
         --fed-aggregation-interval 1 \
         --fed-aggregation-temperature 75 \
+        --fed-inject-margin "$FED_INJECT_MARGIN" \
         --fed-delta-clip-norm 5 \
+        --ea-mutation-prob "$FED_EA_MUTATION_PROB" \
+        --ea-prob-reset-and-super "$FED_EA_RESET_PROB" \
         --ea-weight-clip 5 \
         --elite-archive-size 5 \
         --elite-archive-restore-copies 1 \

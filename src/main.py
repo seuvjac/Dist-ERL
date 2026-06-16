@@ -43,7 +43,6 @@ FED_EVOFSAC_ENVS = ('CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-
 FED_EVOSAC_ENVS = (
     'Swimmer-v5',
     'Reacher-v5',
-    'HalfCheetah-v5',
     'Hopper-v5',
 )
 
@@ -452,6 +451,13 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         inject_threshold = current_best + abs(current_best) * args.fed_inject_margin
         inject_ok = aggregated_eval_mean >= inject_threshold
         if aggregated and args.migration_copies > 0 and inject_ok:
+            ray.get(manager.update_elite_archive_evaluated.remote([{
+                'id': args.population_size + generation,
+                'seed': int(archive_seed),
+                'weights': aggregated,
+                'fitness': aggregated_eval_mean,
+                'fitness_std': aggregated_eval_std,
+            }], args.elite_archive_size))
             inserted = ray.get(manager.inject_rl_individual.remote(
                 aggregated, args.inject_noise, args.migration_copies, args.migration_blend))
             ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))

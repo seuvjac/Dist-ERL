@@ -7,7 +7,6 @@
 ```text
 Swimmer-v5
 Reacher-v5
-HalfCheetah-v5
 Hopper-v5
 ```
 
@@ -19,7 +18,6 @@ Hopper-v5
 |------|----------|----------------------|
 | `Swimmer-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 | `Reacher-v5` | continuous | body mass、joint damping、geom friction、observation/reward/action perturbation |
-| `HalfCheetah-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 | `Hopper-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 
 当前在每个原始环境上定义三种异质联邦场景：
@@ -51,7 +49,6 @@ FedEvoSAC
 ```text
 Swimmer-v5
 Reacher-v5
-HalfCheetah-v5
 Hopper-v5
 ```
 
@@ -125,6 +122,7 @@ python -m src.main --mode fed_evo_rl --algorithm SAC --env Reacher-v5
 
 7. **RL-to-EA soft injection 和 deployable policy**
    - 若聚合 actor 的本地表现达到门控条件，server 将其 soft inject 到 EA population 的弱 non-elite 个体；
+   - 通过固定 validation 的聚合 actor 会立即写入 global elite archive，成为可部署候选；
    - injection 后再次 restore archive elite，防止历史最优 actor 被覆盖；
    - `eval_reward_mean` 记录 global elite archive 中 best actor 的 deployable evaluation；
    - `client_reward_mean` / `client_reward_std` 单独记录本地 SAC rollout 表现。
@@ -281,13 +279,12 @@ FedAvg-DQN
 | 外部代码 | 实际 RL 主体 | 本地路径 | 可比环境 | 使用方式 |
 |----------|--------------|----------|----------|----------|
 | FedFormer | SAC | `/home/ywj/code/FedFormer` | MetaWorld MT10，不是当前三个 Gymnasium 连续主环境 | related work 或单独 MetaWorld 复现，不混入主图 |
-| Byzantine-Federated-RL / FedPG-BR | policy gradient | `/home/ywj/code/Byzantine-Federated-RL` | CartPole-v1、LunarLander-v2、HalfCheetah-v2 | 可作为 CartPole/LunarLander/HalfCheetah 外部原代码复现 |
+| Byzantine-Federated-RL / FedPG-BR | policy gradient | `/home/ywj/code/Byzantine-Federated-RL` | CartPole-v1、LunarLander-v2 | 可作为离散 external-original 辅助复现 |
 | Federated-DRL | DQN / DDQN | `/home/ywj/code/Federated-DRL` | CartPole-v1、LunarLander-v2、Mario | 可作为 FedAvg-DQN 外部原代码复现 |
 | FederatedRL | PPO | `/home/ywj/code/FederatedRL` | CartPole-v1、若干 MuJoCo/IoT 任务 | 可作为 PPO-FedRL related work，默认不进连续主图 |
 
 当前可严格复现的外部对照边界：
 
-- `HalfCheetah`：`Byzantine-Federated-RL` 支持旧版 `HalfCheetah-v2`，本项目主线使用 `HalfCheetah-v5`；可做 external-original 辅助图，但不能和内部同协议主图混称。
 - `Reacher`：当前外部仓库没有同版本、同协议的严格复现结果，因此只进入本项目内部同协议主图。
 - `CartPole / Acrobot / MountainCar`：保留为离散附线；外部 DQN / FedPG 代码可用于 related-work 复现，不进入连续 FedEvoSAC 主图。
 - `FedFormer`：原论文是 MetaWorld 连续控制 SAC；若要比较，应另开 MetaWorld 复现实验。
@@ -300,14 +297,14 @@ FedAvg-DQN
 ./run_continuous_fedevosac_suite.sh
 ```
 
-当前四环境诊断主实验默认使用无异质设置，先验证算法本身的学习与聚合稳定性：
+当前三环境诊断主实验默认使用无异质设置，先验证算法本身的学习与聚合稳定性：
 
 ```text
 CLIENT_HETEROGENEITY=0.0
 CLIENT_HETEROGENEITY_MODE=none
 NUM_WORKERS=3
 SEEDS=0
-TARGET_ENV_STEPS=120000
+TARGET_ENV_STEPS=459000
 ```
 
 默认连续环境：
@@ -315,11 +312,10 @@ TARGET_ENV_STEPS=120000
 ```text
 Swimmer-v5
 Reacher-v5
-HalfCheetah-v5
 Hopper-v5
 ```
 
-为了让环境难度和运行成本尽量接近 Swimmer，无异质主实验采用环境级 horizon：`Swimmer/HalfCheetah/Hopper=200`，`Reacher=50`。四个环境使用相同的 `120000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算；Reacher 通过增加本地 rollouts 补足短 episode 的 SAC 数据，FedEvoSAC 每代执行联邦训练。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。
+HalfCheetah 已从主实验中移除。此前 Swimmer 从 150+ 掉到 30 左右，主要不是单纯算法退化，而是实验协议从旧的 `1000` 步 episode horizon / 更长预算切到 `200` 步 horizon / `120000` step，并且 archive 改成独立 validation 后不再记录乐观 best-so-far。新协议恢复 `Swimmer/Hopper=1000`，`Reacher=50`；三个环境使用相同的 `459000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算。Swimmer/Hopper 的 archive validation 使用轻量 `1 candidate x 1 episode`，避免长 horizon 下验证成本吃掉过多 EA generations；Reacher 仍保留更密集的短 horizon 评估。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。
 
 输出三类结果：
 
@@ -419,13 +415,13 @@ python -m src.main \
 - reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
 - reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；当前连续证据来自 `Swimmer-v5`、`Reacher-v5`、`HalfCheetah-v5` 和 `Hopper-v5`。无异质结果先验证学习能力，之后再逐级加入 mild / mixed heterogeneity。
+最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；当前连续证据来自 `Swimmer-v5`、`Reacher-v5` 和 `Hopper-v5`。无异质结果先验证学习能力，之后再逐级加入 mild / mixed heterogeneity。
 
 ## 12. 当前实现状态
 
 已完成：
 
-- 连续环境主线：`Swimmer-v5`、`Reacher-v5`、`HalfCheetah-v5`、`Hopper-v5`；
+- 连续环境主线：`Swimmer-v5`、`Reacher-v5`、`Hopper-v5`；
 - `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；
@@ -438,7 +434,7 @@ python -m src.main \
 
 主要风险：
 
-- 连续控制环境训练方差更大，`HalfCheetah-v5` 需要更长预算和多 seed 统计；
+- 连续控制环境训练方差更大，Hopper 仍需要更长预算和多 seed 统计；
 - actor-only 共享更稳，但 client critic 完全本地化，早期本地更新可能噪声较大；
 - 异质 client reward scale 会影响 softmax 聚合权重，需要关注 `aggregation_entropy`；
 - MuJoCo 异质性过强时会改变最优动作尺度，EA mutation、action noise 和 SAC temperature 需要联动调参；
