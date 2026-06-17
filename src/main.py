@@ -595,6 +595,11 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         total_env_steps_history.append(total_env_steps)
         cumulative_rl_updates += int(sum(r.get('updates_applied', 0) for r in train_results))
         rl_steps_history.append(cumulative_rl_updates)
+        active_client_count = selected_count if fed_round_applied else 0
+        display_aggregation = (
+            f"{args.fed_aggregation}/{aggregation_score_mode}"
+            if fed_round_applied else "none"
+        )
 
         log_data = {
             'generation': generation,
@@ -621,7 +626,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             'client_reward_std': client_reward_std,
             'client_fitness_mean': float(np.mean(client_fitness_values)) if client_fitness_values else 0.0,
             'client_fitness_std': float(np.std(client_fitness_values)) if client_fitness_values else 0.0,
-            'selected_clients': selected_count if fed_round_applied else 0,
+            'selected_clients': active_client_count,
             'aggregation_entropy': weight_entropy(
                 aggregation_scores,
                 mode=args.fed_aggregation,
@@ -649,7 +654,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             f"Gen {generation}: deploy={deployable_eval_mean:.2f}, "
             f"fed_rollout={client_reward_mean:.2f} +/- {client_reward_std:.2f}, "
             f"ea_best={stats['max_fitness']:.2f}, diversity={stats.get('weight_diversity', 0.0):.3f}, "
-            f"clients={selected_count}/{args.num_clients}, agg={args.fed_aggregation}/{aggregation_score_mode}, "
+            f"clients={active_client_count}/{args.num_clients}, agg={display_aggregation}, "
             f"inject_warmup={int(injection_warmup_active)}"
         )
         if args.wandb:
