@@ -333,6 +333,8 @@ HalfCheetah 已从主实验中移除。此前 Swimmer 从 150+ 掉到 30 左右�
 
 三个环境使用相同的 `459000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement；短 horizon Reacher 中则允许更频繁的 SAC refinement。
 
+Swimmer 对早期 federation 较敏感。当前只在 `Swimmer-v5` 上启用 warm-up：前 `2` 次 federated aggregation 使用 `batch_zscore` score normalization，并跳过 Fed-to-EA injection，只记录 candidate validation；第 3 次起恢复 `relative_gain` 聚合和正常 injection。`FedEvoSAC-raw_softmax` 消融不使用该 warm-up，保持原始 raw reward softmax 路径。
+
 输出三类结果：
 
 ```text

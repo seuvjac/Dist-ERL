@@ -58,7 +58,8 @@ METRIC_FIELDS = [
     'federated_warm_start', 'migration_copies',
     'client_reward_mean', 'client_reward_std', 'client_fitness_mean',
     'client_fitness_std', 'selected_clients', 'aggregation_entropy',
-    'aggregation_score_mean', 'aggregation_score_std',
+    'aggregation_score_mean', 'aggregation_score_std', 'aggregation_score_mode',
+    'fed_aggregation_round',
     'fed_round_applied', 'archive_best', 'archive_size',
     'deployable_eval_mean', 'deployable_eval_std',
     'aggregation_temperature', 'deployment_rollback', 'deployment_rollback_count',
@@ -104,8 +105,13 @@ def parse_args():
     parser.add_argument('--fed-aggregation-temperature', type=float, default=75.0,
                         help='Softmax temperature for fitness-weighted client aggregation')
     parser.add_argument('--fed-score-normalization', type=str, default='relative_gain',
-                        choices=['raw', 'batch_zscore', 'relative_gain'],
+                        choices=['raw', 'batch_zscore', 'relative_gain', 'uniform'],
                         help='Normalize client rewards before reward-aware aggregation')
+    parser.add_argument('--fed-score-warmup-rounds', type=int, default=0,
+                        help='Use --fed-score-warmup-normalization for the first N federated rounds')
+    parser.add_argument('--fed-score-warmup-normalization', type=str, default='batch_zscore',
+                        choices=['raw', 'batch_zscore', 'relative_gain', 'uniform'],
+                        help='Temporary score normalization during early federated rounds')
     parser.add_argument('--fed-score-ema-beta', type=float, default=0.9,
                         help='EMA beta for per-client reward baseline in relative_gain aggregation')
     parser.add_argument('--fed-score-min-std', type=float, default=1.0,
@@ -116,6 +122,8 @@ def parse_args():
                         help='Clip each client update delta before federated aggregation')
     parser.add_argument('--fed-inject-margin', type=float, default=-0.05,
                         help='Relative margin vs current EA best required before injecting aggregated actor')
+    parser.add_argument('--fed-injection-warmup-rounds', type=int, default=0,
+                        help='Skip Fed-to-EA injection for the first N federated rounds')
     parser.add_argument('--elite-archive-size', type=int, default=5,
                         help='Global top-k EA archive for FedEvoRL')
     parser.add_argument('--elite-archive-restore-copies', type=int, default=1,
@@ -232,11 +240,14 @@ def _setup_local_logger(args):
         'fed_aggregation_interval': args.fed_aggregation_interval,
         'fed_aggregation_temperature': args.fed_aggregation_temperature,
         'fed_score_normalization': args.fed_score_normalization,
+        'fed_score_warmup_rounds': args.fed_score_warmup_rounds,
+        'fed_score_warmup_normalization': args.fed_score_warmup_normalization,
         'fed_score_ema_beta': args.fed_score_ema_beta,
         'fed_score_min_std': args.fed_score_min_std,
         'fed_min_client_score_quantile': args.fed_min_client_score_quantile,
         'fed_delta_clip_norm': args.fed_delta_clip_norm,
         'fed_inject_margin': args.fed_inject_margin,
+        'fed_injection_warmup_rounds': args.fed_injection_warmup_rounds,
         'ea_weight_clip': args.ea_weight_clip,
         'elite_archive_size': args.elite_archive_size,
         'elite_archive_restore_copies': args.elite_archive_restore_copies,
@@ -314,6 +325,8 @@ def _apply_fed_ablation_args(args) -> None:
     elif args.fed_ablation == FED_ABLATION_RAW_SOFTMAX:
         args.fed_aggregation = 'softmax'
         args.fed_score_normalization = 'raw'
+        args.fed_score_warmup_rounds = 0
+        args.fed_injection_warmup_rounds = 0
 
 
 def _aggregation_scores_from_rewards(
@@ -334,6 +347,8 @@ def _aggregation_scores_from_rewards(
     mode = str(mode)
     if mode == 'raw':
         scores = raw.copy()
+    elif mode == 'uniform':
+        scores = np.zeros_like(raw)
     elif mode == 'batch_zscore':
         scores = (raw - raw.mean()) / (raw.std() + 1e-8)
     else:
@@ -415,6 +430,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
     client_reward_var = np.ones(args.num_clients, dtype=np.float64) * max(1e-8, args.fed_score_min_std ** 2)
     client_reward_seen = np.zeros(args.num_clients, dtype=np.int64)
     cumulative_rl_updates = 0
+    fed_aggregation_count = 0
 
     generation = 0
     while (
@@ -488,13 +504,17 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             train_results = ray.get(train_refs)
         client_rewards = [r['avg_reward'] for r in train_results]
         client_weights = [r['weights'] for r in train_results]
+        aggregation_round_index = fed_aggregation_count if fed_round_applied else -1
+        aggregation_score_mode = args.fed_score_normalization
+        if fed_round_applied and fed_aggregation_count < max(0, args.fed_score_warmup_rounds):
+            aggregation_score_mode = args.fed_score_warmup_normalization
         aggregation_scores = _aggregation_scores_from_rewards(
             client_indices,
             client_rewards,
             client_reward_ema,
             client_reward_var,
             client_reward_seen,
-            args.fed_score_normalization,
+            aggregation_score_mode,
             args.fed_score_ema_beta,
             args.fed_score_min_std,
         ) if client_rewards else []
@@ -526,7 +546,11 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             aggregated_eval_mean = float(np.mean(scores))
             aggregated_eval_std = float(np.std(scores))
         inject_threshold = current_best + abs(current_best) * args.fed_inject_margin
-        inject_ok = aggregated_eval_mean >= inject_threshold
+        injection_warmup_active = (
+            fed_round_applied
+            and fed_aggregation_count < max(0, args.fed_injection_warmup_rounds)
+        )
+        inject_ok = aggregated_eval_mean >= inject_threshold and not injection_warmup_active
         if aggregated and args.migration_copies > 0 and inject_ok:
             ray.get(manager.update_elite_archive_evaluated.remote([{
                 'id': args.population_size + generation,
@@ -605,6 +629,8 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             ) if aggregation_scores else 0.0,
             'aggregation_score_mean': aggregation_score_mean,
             'aggregation_score_std': aggregation_score_std,
+            'aggregation_score_mode': aggregation_score_mode if client_rewards else '',
+            'fed_aggregation_round': aggregation_round_index,
             'fed_round_applied': fed_round_applied,
             'archive_best': stats.get('archive_best', 0.0),
             'archive_size': stats.get('archive_size', 0),
@@ -623,11 +649,14 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             f"Gen {generation}: deploy={deployable_eval_mean:.2f}, "
             f"fed_rollout={client_reward_mean:.2f} +/- {client_reward_std:.2f}, "
             f"ea_best={stats['max_fitness']:.2f}, diversity={stats.get('weight_diversity', 0.0):.3f}, "
-            f"clients={selected_count}/{args.num_clients}, agg={args.fed_aggregation}/{args.fed_score_normalization}"
+            f"clients={selected_count}/{args.num_clients}, agg={args.fed_aggregation}/{aggregation_score_mode}, "
+            f"inject_warmup={int(injection_warmup_active)}"
         )
         if args.wandb:
             import wandb
             wandb.log(log_data)
+        if fed_round_applied:
+            fed_aggregation_count += 1
         generation += 1
 
     if eval_reward_history:
