@@ -30,6 +30,8 @@ def parse_args():
                    help='Shift each run so its first logged x value is plotted at zero')
     p.add_argument('--metric', default='current', choices=['current', 'candidate', 'best'],
                    help='current uses deployable eval; candidate uses the current training policy; best uses optimistic archive metrics')
+    p.add_argument('--variance', default='seed', choices=['seed', 'eval', 'combined', 'none'],
+                   help='Uncertainty band source: across seeds, within-run evaluation std, both, or none')
     return p.parse_args()
 
 
@@ -51,7 +53,7 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
         for metrics in sorted(root.glob('*/metrics.csv')):
             meta_path = metrics.parent / 'metadata.json'
             meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
-            xs, ys = [], []
+            xs, ys, y_stds = [], [], []
             with metrics.open(newline='', encoding='utf-8') as f:
                 for row in csv.DictReader(f):
                     if x_axis == 'round':
@@ -59,25 +61,26 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
                     else:
                         x = _num(row.get('total_env_steps'))
                     if metric == 'current':
-                        vals = [_num(row.get('eval_reward_mean'))]
+                        pairs = [(_num(row.get('eval_reward_mean')), _num(row.get('eval_reward_std')))]
                     elif metric == 'candidate':
-                        candidate_vals = [
-                            _num(row.get('candidate_eval_mean')),
-                            _num(row.get('eval_ea_mean')),
-                            _num(row.get('eval_reward_mean')),
+                        pairs = [
+                            (_num(row.get('candidate_eval_mean')), _num(row.get('candidate_eval_std'))),
+                            (_num(row.get('eval_ea_mean')), _num(row.get('eval_ea_std'))),
+                            (_num(row.get('eval_reward_mean')), _num(row.get('eval_reward_std'))),
                         ]
-                        vals = [next((v for v in candidate_vals if np.isfinite(v)), np.nan)]
                     else:
-                        vals = [
-                            _num(row.get('eval_reward_mean')),
-                            _num(row.get('eval_ea_mean')),
-                            _num(row.get('best_fitness')),
-                            _num(row.get('archive_best')),
+                        pairs = [
+                            (_num(row.get('eval_reward_mean')), _num(row.get('eval_reward_std'))),
+                            (_num(row.get('eval_ea_mean')), _num(row.get('eval_ea_std'))),
+                            (_num(row.get('best_fitness')), _num(row.get('fitness_std'))),
+                            (_num(row.get('archive_best')), _num(row.get('deployable_eval_std'))),
                         ]
-                    finite = [v for v in vals if np.isfinite(v)]
+                    finite = [(v, s) for v, s in pairs if np.isfinite(v)]
                     if np.isfinite(x) and finite:
+                        value, std = max(finite, key=lambda item: item[0])
                         xs.append(x)
-                        ys.append(max(finite))
+                        ys.append(value)
+                        y_stds.append(std if np.isfinite(std) else 0.0)
             if len(xs) < 1:
                 continue
             if x_axis == 'progress':
@@ -132,6 +135,7 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
                 'seed': meta.get('seed', ''),
                 'x': np.asarray(xs, dtype=float),
                 'y': np.asarray(ys, dtype=float),
+                'y_std': np.asarray(y_stds, dtype=float),
             })
     return runs
 
@@ -164,6 +168,7 @@ def main():
                 run = dict(run)
                 run['x'] = run['x'][mask]
                 run['y'] = run['y'][mask]
+                run['y_std'] = run['y_std'][mask]
                 capped.append(run)
         runs = capped
     envs = args.envs or sorted({r['env'] for r in runs})
@@ -204,15 +209,29 @@ def main():
             group = [r for r in env_runs if r['label'] == label]
             xs = np.linspace(0, plot_max_x, 100)
             interpolated = []
+            interpolated_stds = []
             for run in group:
                 vals = np.interp(xs, run['x'], run['y'])
+                std_vals = np.interp(xs, run['x'], run['y_std'])
                 vals[xs < run['x'][0]] = np.nan
+                std_vals[xs < run['x'][0]] = np.nan
                 interpolated.append(vals)
+                interpolated_stds.append(std_vals)
             mat = np.vstack(interpolated)
+            std_mat = np.vstack(interpolated_stds)
             y = np.nanmean(mat, axis=0)
-            s = np.nanstd(mat, axis=0)
+            seed_s = np.nanstd(mat, axis=0)
+            eval_s = np.nanmean(std_mat, axis=0)
+            if args.variance == 'eval':
+                s = eval_s
+            elif args.variance == 'combined':
+                s = np.sqrt(seed_s ** 2 + eval_s ** 2)
+            elif args.variance == 'none':
+                s = np.zeros_like(y)
+            else:
+                s = seed_s
             ax.plot(xs, y, label=f"{label} (n={len(group)})", color=colors.get(label), linewidth=2)
-            if len(group) > 1:
+            if np.nanmax(s) > 0:
                 ax.fill_between(xs, y - s, y + s, color=colors.get(label), alpha=0.14)
         if args.plot_kind == 'ablation':
             title = f'{env}: FedEvoFSAC ablations'
