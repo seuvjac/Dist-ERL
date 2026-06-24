@@ -132,6 +132,10 @@ def parse_args():
                         help='Top current EA candidates independently re-evaluated for archive admission')
     parser.add_argument('--archive-eval-episodes', type=int, default=3,
                         help='Fixed-seed episodes per client for independent archive validation')
+    parser.add_argument('--archive-std-penalty', type=float, default=0.0,
+                        help='Risk-aware archive score: mean_return - penalty * eval_std')
+    parser.add_argument('--fed-inject-std-penalty', type=float, default=0.0,
+                        help='Risk-aware Fed-to-EA injection score: candidate_mean - penalty * candidate_std')
     parser.add_argument('--algorithm', type=str, default='FSAC', choices=['FSAC', 'SAC', 'DDPG', 'TD3', 'PPO'],
                         help='RL algorithm (discrete uses FSAC; continuous FedEvoSAC uses SAC)')
     parser.add_argument('--policy-exploration-noise', type=float, default=0.1,
@@ -253,6 +257,8 @@ def _setup_local_logger(args):
         'elite_archive_restore_copies': args.elite_archive_restore_copies,
         'archive_eval_candidates': args.archive_eval_candidates,
         'archive_eval_episodes': args.archive_eval_episodes,
+        'archive_std_penalty': args.archive_std_penalty,
+        'fed_inject_std_penalty': args.fed_inject_std_penalty,
     }
     with open(os.path.join(run_dir, 'metadata.json'), 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
@@ -480,7 +486,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                 'fitness_std': float(np.std(scores)),
             })
         ray.get(manager.update_elite_archive_evaluated.remote(
-            archive_rows, args.elite_archive_size))
+            archive_rows, args.elite_archive_size, args.archive_std_penalty))
         ray.get(manager.evolve_population.remote())
         ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))
 
@@ -546,11 +552,15 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             aggregated_eval_mean = float(np.mean(scores))
             aggregated_eval_std = float(np.std(scores))
         inject_threshold = current_best + abs(current_best) * args.fed_inject_margin
+        aggregated_eval_score = (
+            aggregated_eval_mean
+            - max(0.0, args.fed_inject_std_penalty) * aggregated_eval_std
+        )
         injection_warmup_active = (
             fed_round_applied
             and fed_aggregation_count < max(0, args.fed_injection_warmup_rounds)
         )
-        inject_ok = aggregated_eval_mean >= inject_threshold and not injection_warmup_active
+        inject_ok = aggregated_eval_score >= inject_threshold and not injection_warmup_active
         if aggregated and args.migration_copies > 0 and inject_ok:
             ray.get(manager.update_elite_archive_evaluated.remote([{
                 'id': args.population_size + generation,
@@ -558,7 +568,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                 'weights': aggregated,
                 'fitness': aggregated_eval_mean,
                 'fitness_std': aggregated_eval_std,
-            }], args.elite_archive_size))
+            }], args.elite_archive_size, args.archive_std_penalty))
             inserted = ray.get(manager.inject_rl_individual.remote(
                 aggregated, args.inject_noise, args.migration_copies, args.migration_blend))
             ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))

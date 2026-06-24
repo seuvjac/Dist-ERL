@@ -328,12 +328,14 @@ HalfCheetah 已从主实验中移除。此前 Swimmer 从 150+ 掉到 30 左右�
 | 环境 | horizon | FedEvoSAC population | 联邦频率 | client SAC updates | archive validation |
 |------|---------|----------------------|----------|--------------------|-------------------|
 | `Swimmer-v5` | `1000` | `10` | 每 5 代 | `4` | top-2 candidates x 1 episode |
-| `Hopper-v5` | `1000` | `10` | 每 5 代 | `4` | top-2 candidates x 1 episode |
-| `Reacher-v5` | `50` | `8` | 每 1 代 | `12` | top-2 candidates x 2 episodes |
+| `Hopper-v5` | `1000` | `12` | 每 4 代 | `8` | top-3 candidates x 2 episodes |
+| `Reacher-v5` | `50` | `8` | 每 1 代 | `12` | top-2 candidates x 5 episodes |
 
 三个环境使用相同的 `459000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement；短 horizon Reacher 中则允许更频繁的 SAC refinement。
 
 Swimmer 对早期 federation 较敏感。当前只在 `Swimmer-v5` 上启用 warm-up：前 `2` 次 federated aggregation 使用 `batch_zscore` score normalization，并跳过 Fed-to-EA injection，只记录 candidate validation；第 3 次起恢复 `relative_gain` 聚合和正常 injection。`FedEvoSAC-raw_softmax` 消融不使用该 warm-up，保持原始 raw reward softmax 路径。
+
+Reacher 的目标位置和短 horizon 会放大 evaluation 波动，因此当前启用 risk-aware archive：archive 排序使用 `mean_return - 0.5 * eval_std`，Fed-to-EA injection 也使用相同的 std penalty 做候选验收。这样不是简单抹平曲线，而是让高均值但高不确定性的 actor 不轻易成为 deployable policy。Hopper 的 `1000+` 回报在 MuJoCo Hopper 中并非异常上界，但仍偏中等，因此 Hopper 使用更大的 population、更频繁但更温和的 federated refinement 和更低 reset mutation 来尝试提高最终回报。Swimmer 的 SAC baselines 在无异质设置下天然容易重合；runner 对 FedAvg、FedBest、FedSoftmax 和 Median 使用 mode-specific server learning rate / temperature / critic warm-up，使不同聚合思想的学习过程更可见，同时不改变它们的 RL 主体。
 
 输出三类结果：
 

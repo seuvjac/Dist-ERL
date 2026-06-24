@@ -152,6 +152,7 @@ class EAManager:
         self,
         evaluated: List[Dict[str, Any]],
         archive_size: int = 5,
+        std_penalty: float = 0.0,
     ) -> Dict[str, float]:
         """Update the archive only with independently validated candidates."""
         self._archive_size = max(0, int(archive_size))
@@ -159,16 +160,32 @@ class EAManager:
             self._elite_archive = []
             return {'archive_size': 0, 'archive_best': 0.0, 'archive_best_std': 0.0}
 
+        std_penalty = max(0.0, float(std_penalty))
         candidates = [ind.copy() for ind in self._elite_archive]
         for row in evaluated:
+            fitness = float(row['fitness'])
+            fitness_std = float(row.get('fitness_std', 0.0))
+            archive_score = fitness - std_penalty * fitness_std
             candidates.append(Individual(
                 id=int(row['id']),
                 weights={key: np.array(value, copy=True) for key, value in row['weights'].items()},
-                fitness=float(row['fitness']),
+                fitness=fitness,
                 seed=int(row.get('seed', 0)),
-                hyperparams={'archive_eval_std': float(row.get('fitness_std', 0.0))},
+                hyperparams={
+                    'archive_eval_std': fitness_std,
+                    'archive_eval_score': archive_score,
+                },
             ))
-        candidates.sort(key=lambda x: x.fitness, reverse=True)
+        for ind in candidates:
+            params = ind.hyperparams or {}
+            if 'archive_eval_score' not in params:
+                params['archive_eval_std'] = float(params.get('archive_eval_std', 0.0))
+                params['archive_eval_score'] = float(ind.fitness) - std_penalty * params['archive_eval_std']
+                ind.hyperparams = params
+        candidates.sort(
+            key=lambda x: float((x.hyperparams or {}).get('archive_eval_score', x.fitness)),
+            reverse=True,
+        )
 
         unique = []
         seen = set()
@@ -209,6 +226,7 @@ class EAManager:
             'archive_size': len(self._elite_archive),
             'archive_best': float(best.fitness),
             'archive_best_std': float((best.hyperparams or {}).get('archive_eval_std', 0.0)),
+            'archive_best_score': float((best.hyperparams or {}).get('archive_eval_score', best.fitness)),
         }
 
     def boost_diversity(self, immigrant_fraction: float = 0.15,

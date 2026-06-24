@@ -32,6 +32,8 @@ def parse_args():
                    help='current uses deployable eval; candidate uses the current training policy; best uses optimistic archive metrics')
     p.add_argument('--variance', default='seed', choices=['seed', 'eval', 'combined', 'none'],
                    help='Uncertainty band source: across seeds, within-run evaluation std, both, or none')
+    p.add_argument('--smooth-window', type=int, default=1,
+                   help='Moving-average window over interpolated plotting points; 1 disables smoothing')
     return p.parse_args()
 
 
@@ -42,6 +44,26 @@ def _num(v):
         return float(v)
     except Exception:
         return np.nan
+
+
+def _smooth_nan(values, window):
+    window = int(window)
+    arr = np.asarray(values, dtype=float)
+    if window <= 1 or arr.size < 3:
+        return arr
+    if window % 2 == 0:
+        window += 1
+    window = min(window, arr.size if arr.size % 2 == 1 else arr.size - 1)
+    if window <= 1:
+        return arr
+    kernel = np.ones(window, dtype=float)
+    finite = np.isfinite(arr)
+    filled = np.where(finite, arr, 0.0)
+    num = np.convolve(filled, kernel, mode='same')
+    den = np.convolve(finite.astype(float), kernel, mode='same')
+    out = np.divide(num, den, out=np.full_like(arr, np.nan), where=den > 0)
+    out[~finite & (den <= 0)] = np.nan
+    return out
 
 
 def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'):
@@ -207,7 +229,7 @@ def main():
             plot_max_x = max(float(r['x'][-1]) for r in env_runs)
         for label in labels:
             group = [r for r in env_runs if r['label'] == label]
-            xs = np.linspace(0, plot_max_x, 100)
+            xs = np.linspace(0, plot_max_x, 240)
             interpolated = []
             interpolated_stds = []
             for run in group:
@@ -230,6 +252,8 @@ def main():
                 s = np.zeros_like(y)
             else:
                 s = seed_s
+            y = _smooth_nan(y, args.smooth_window)
+            s = _smooth_nan(s, args.smooth_window)
             ax.plot(xs, y, label=f"{label} (n={len(group)})", color=colors.get(label), linewidth=2)
             if np.nanmax(s) > 0:
                 ax.fill_between(xs, y - s, y + s, color=colors.get(label), alpha=0.14)

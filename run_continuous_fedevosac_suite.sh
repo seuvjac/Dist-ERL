@@ -17,6 +17,8 @@ ABLATION_OUT_DIR=${ABLATION_OUT_DIR:-"plots/fedevosac_continuous_ablations_round
 SUMMARY_OUT_DIR=${SUMMARY_OUT_DIR:-"plots/fedevosac_continuous_tables"}
 PLOT_X_AXIS=${PLOT_X_AXIS:-"round"}
 PLOT_METRIC=${PLOT_METRIC:-"current"}
+PLOT_VARIANCE=${PLOT_VARIANCE:-"none"}
+PLOT_SMOOTH_WINDOW=${PLOT_SMOOTH_WINDOW:-"7"}
 CLIENT_HETEROGENEITY=${CLIENT_HETEROGENEITY:-"0.0"}
 CLIENT_HETEROGENEITY_MODE=${CLIENT_HETEROGENEITY_MODE:-"none"}
 BUDGET_PRESET=${BUDGET_PRESET:-"reduced"}
@@ -26,15 +28,22 @@ BASELINE_MAX_UPDATES_PER_ROUND=${BASELINE_MAX_UPDATES_PER_ROUND:-"20"}
 BASELINE_BASE_UPDATES=${BASELINE_BASE_UPDATES:-"4"}
 BASELINE_AGGREGATION_INTERVAL=${BASELINE_AGGREGATION_INTERVAL:-"5"}
 BASELINE_SERVER_LEARNING_RATE=${BASELINE_SERVER_LEARNING_RATE:-"0.25"}
+BASELINE_FEDERATED_TEMPERATURE=${BASELINE_FEDERATED_TEMPERATURE:-"50"}
+BASELINE_POST_SYNC_CRITIC_WARMUP=${BASELINE_POST_SYNC_CRITIC_WARMUP:-"2"}
+BASELINE_DEPLOYMENT_ROLLBACK_TOLERANCE=${BASELINE_DEPLOYMENT_ROLLBACK_TOLERANCE:-"0.0"}
 FED_INJECT_MARGIN=${FED_INJECT_MARGIN:-"-0.05"}
 FED_EA_MUTATION_PROB=${FED_EA_MUTATION_PROB:-"0.90"}
 FED_EA_RESET_PROB=${FED_EA_RESET_PROB:-"0.05"}
+FED_DELTA_CLIP_NORM=${FED_DELTA_CLIP_NORM:-"5"}
+FED_AGGREGATION_TEMPERATURE=${FED_AGGREGATION_TEMPERATURE:-"75"}
 FED_SCORE_NORMALIZATION=${FED_SCORE_NORMALIZATION:-"relative_gain"}
 FED_SCORE_EMA_BETA=${FED_SCORE_EMA_BETA:-"0.90"}
 FED_SCORE_MIN_STD=${FED_SCORE_MIN_STD:-"1.0"}
 FED_SCORE_WARMUP_ROUNDS=${FED_SCORE_WARMUP_ROUNDS:-"0"}
 FED_SCORE_WARMUP_NORMALIZATION=${FED_SCORE_WARMUP_NORMALIZATION:-"batch_zscore"}
 FED_INJECTION_WARMUP_ROUNDS=${FED_INJECTION_WARMUP_ROUNDS:-"0"}
+FED_ARCHIVE_STD_PENALTY=${FED_ARCHIVE_STD_PENALTY:-"0.0"}
+FED_INJECT_STD_PENALTY=${FED_INJECT_STD_PENALTY:-"0.0"}
 
 for ENV_NAME in $ENVS; do
   read POP CLIENTS GENS STEPS <<<"$(python3 - <<PY
@@ -61,6 +70,13 @@ PY
   SCORE_WARMUP_ROUNDS="$FED_SCORE_WARMUP_ROUNDS"
   SCORE_WARMUP_NORMALIZATION="$FED_SCORE_WARMUP_NORMALIZATION"
   INJECTION_WARMUP_ROUNDS="$FED_INJECTION_WARMUP_ROUNDS"
+  ARCHIVE_STD_PENALTY="$FED_ARCHIVE_STD_PENALTY"
+  INJECT_STD_PENALTY="$FED_INJECT_STD_PENALTY"
+  EA_MUTATION_PROB="$FED_EA_MUTATION_PROB"
+  EA_RESET_PROB="$FED_EA_RESET_PROB"
+  INJECT_MARGIN="$FED_INJECT_MARGIN"
+  DELTA_CLIP_NORM="$FED_DELTA_CLIP_NORM"
+  AGGREGATION_TEMPERATURE="$FED_AGGREGATION_TEMPERATURE"
   case "$ENV_NAME" in
     Reacher-v5)
       STEPS=${FED_MAX_EPISODE_STEPS:-50}
@@ -68,6 +84,12 @@ PY
       CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-4}
       CLIENT_UPDATES=${FED_CLIENT_UPDATES:-12}
       CLIENT_CRITIC_WARMUP=${FED_CLIENT_CRITIC_WARMUP:-6}
+      EVAL_EPISODES=${FED_REACHER_EVAL_EPISODES:-4}
+      ARCHIVE_EVAL_EPISODES=${FED_REACHER_ARCHIVE_EVAL_EPISODES:-5}
+      ARCHIVE_STD_PENALTY=${FED_REACHER_ARCHIVE_STD_PENALTY:-0.50}
+      INJECT_STD_PENALTY=${FED_REACHER_INJECT_STD_PENALTY:-0.50}
+      EA_MUTATION_PROB=${FED_REACHER_EA_MUTATION_PROB:-0.75}
+      EA_RESET_PROB=${FED_REACHER_EA_RESET_PROB:-0.02}
       ;;
     Swimmer-v5)
       POP=${FED_POPULATION_SIZE:-10}
@@ -81,16 +103,23 @@ PY
       SCORE_WARMUP_ROUNDS=${FED_SWIMMER_SCORE_WARMUP_ROUNDS:-2}
       SCORE_WARMUP_NORMALIZATION=${FED_SWIMMER_SCORE_WARMUP_NORMALIZATION:-batch_zscore}
       INJECTION_WARMUP_ROUNDS=${FED_SWIMMER_INJECTION_WARMUP_ROUNDS:-2}
+      EA_MUTATION_PROB=${FED_SWIMMER_EA_MUTATION_PROB:-0.90}
+      EA_RESET_PROB=${FED_SWIMMER_EA_RESET_PROB:-0.05}
       ;;
     Hopper-v5)
-      POP=${FED_POPULATION_SIZE:-10}
+      POP=${FED_HOPPER_POPULATION_SIZE:-${FED_POPULATION_SIZE:-12}}
       STEPS=${FED_MAX_EPISODE_STEPS:-1000}
-      FED_AGG_INTERVAL=${FED_AGGREGATION_INTERVAL:-5}
-      CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-1}
-      CLIENT_UPDATES=${FED_CLIENT_UPDATES:-4}
-      CLIENT_CRITIC_WARMUP=${FED_CLIENT_CRITIC_WARMUP:-2}
-      ARCHIVE_EVAL_CANDIDATES=${FED_ARCHIVE_EVAL_CANDIDATES:-2}
-      ARCHIVE_EVAL_EPISODES=${FED_ARCHIVE_EVAL_EPISODES:-1}
+      FED_AGG_INTERVAL=${FED_AGGREGATION_INTERVAL:-4}
+      CLIENT_ROLLOUTS=${FED_CLIENT_ROLLOUTS:-2}
+      CLIENT_UPDATES=${FED_CLIENT_UPDATES:-8}
+      CLIENT_CRITIC_WARMUP=${FED_CLIENT_CRITIC_WARMUP:-4}
+      ARCHIVE_EVAL_CANDIDATES=${FED_ARCHIVE_EVAL_CANDIDATES:-3}
+      ARCHIVE_EVAL_EPISODES=${FED_ARCHIVE_EVAL_EPISODES:-2}
+      EA_MUTATION_PROB=${FED_HOPPER_EA_MUTATION_PROB:-0.82}
+      EA_RESET_PROB=${FED_HOPPER_EA_RESET_PROB:-0.02}
+      INJECT_MARGIN=${FED_HOPPER_INJECT_MARGIN:-"-0.02"}
+      DELTA_CLIP_NORM=${FED_HOPPER_DELTA_CLIP_NORM:-4}
+      AGGREGATION_TEMPERATURE=${FED_HOPPER_AGGREGATION_TEMPERATURE:-50}
       ;;
   esac
   CLIENTS=${FED_NUM_CLIENTS:-3}
@@ -125,22 +154,24 @@ PY
         --client-heterogeneity-mode "$CLIENT_HETEROGENEITY_MODE" \
         --fed-aggregation softmax \
         --fed-aggregation-interval "$FED_AGG_INTERVAL" \
-        --fed-aggregation-temperature 75 \
+        --fed-aggregation-temperature "$AGGREGATION_TEMPERATURE" \
         --fed-score-normalization "$FED_SCORE_NORMALIZATION" \
         --fed-score-warmup-rounds "$SCORE_WARMUP_ROUNDS" \
         --fed-score-warmup-normalization "$SCORE_WARMUP_NORMALIZATION" \
         --fed-score-ema-beta "$FED_SCORE_EMA_BETA" \
         --fed-score-min-std "$FED_SCORE_MIN_STD" \
         --fed-injection-warmup-rounds "$INJECTION_WARMUP_ROUNDS" \
-        --fed-inject-margin "$FED_INJECT_MARGIN" \
-        --fed-delta-clip-norm 5 \
-        --ea-mutation-prob "$FED_EA_MUTATION_PROB" \
-        --ea-prob-reset-and-super "$FED_EA_RESET_PROB" \
+        --fed-inject-margin "$INJECT_MARGIN" \
+        --fed-inject-std-penalty "$INJECT_STD_PENALTY" \
+        --fed-delta-clip-norm "$DELTA_CLIP_NORM" \
+        --ea-mutation-prob "$EA_MUTATION_PROB" \
+        --ea-prob-reset-and-super "$EA_RESET_PROB" \
         --ea-weight-clip 5 \
         --elite-archive-size 5 \
         --elite-archive-restore-copies 1 \
         --archive-eval-candidates "$ARCHIVE_EVAL_CANDIDATES" \
         --archive-eval-episodes "$ARCHIVE_EVAL_EPISODES" \
+        --archive-std-penalty "$ARCHIVE_STD_PENALTY" \
         --client-rollouts "$CLIENT_ROLLOUTS" \
         --client-updates "$CLIENT_UPDATES" \
         --client-critic-warmup-updates "$CLIENT_CRITIC_WARMUP" \
@@ -152,6 +183,30 @@ PY
     done
     for MODE in $SAC_BASELINES; do
       EXP="${MODE}_${ENV_NAME}_s${SEED}"
+      MODE_SERVER_LEARNING_RATE="$BASELINE_SERVER_LEARNING_RATE"
+      MODE_FEDERATED_TEMPERATURE="$BASELINE_FEDERATED_TEMPERATURE"
+      MODE_POST_SYNC_CRITIC_WARMUP="$BASELINE_POST_SYNC_CRITIC_WARMUP"
+      MODE_DEPLOYMENT_ROLLBACK_TOLERANCE="$BASELINE_DEPLOYMENT_ROLLBACK_TOLERANCE"
+      if [[ "$ENV_NAME" == "Swimmer-v5" ]]; then
+        case "$MODE" in
+          fedavg_sac)
+            MODE_SERVER_LEARNING_RATE=${SWIMMER_FEDAVG_SERVER_LR:-"0.18"}
+            ;;
+          fedbest_sac)
+            MODE_SERVER_LEARNING_RATE=${SWIMMER_FEDBEST_SERVER_LR:-"0.40"}
+            MODE_POST_SYNC_CRITIC_WARMUP=${SWIMMER_FEDBEST_POST_SYNC_CRITIC_WARMUP:-"1"}
+            MODE_DEPLOYMENT_ROLLBACK_TOLERANCE=${SWIMMER_FEDBEST_ROLLBACK_TOLERANCE:-"0.50"}
+            ;;
+          fedsoftmax_sac_noea)
+            MODE_SERVER_LEARNING_RATE=${SWIMMER_FEDSOFTMAX_SERVER_LR:-"0.32"}
+            MODE_FEDERATED_TEMPERATURE=${SWIMMER_FEDSOFTMAX_TEMPERATURE:-"8"}
+            ;;
+          fedmedian_sac)
+            MODE_SERVER_LEARNING_RATE=${SWIMMER_FEDMEDIAN_SERVER_LR:-"0.12"}
+            MODE_POST_SYNC_CRITIC_WARMUP=${SWIMMER_FEDMEDIAN_POST_SYNC_CRITIC_WARMUP:-"4"}
+            ;;
+        esac
+      fi
       python3 scripts/train_continuous_sac_baseline.py \
         --env "$ENV_NAME" \
         --seed "$SEED" \
@@ -162,8 +217,11 @@ PY
         --update-to-data-ratio "$BASELINE_UPDATE_TO_DATA_RATIO" \
         --max-updates-per-round "$BASELINE_MAX_UPDATES_PER_ROUND" \
         --aggregation-interval "$BASELINE_AGGREGATION_INTERVAL" \
-        --server-learning-rate "$BASELINE_SERVER_LEARNING_RATE" \
+        --server-learning-rate "$MODE_SERVER_LEARNING_RATE" \
+        --federated-temperature "$MODE_FEDERATED_TEMPERATURE" \
         --aggregation-eval-episodes "$ARCHIVE_EVAL_EPISODES" \
+        --post-sync-critic-warmup-updates "$MODE_POST_SYNC_CRITIC_WARMUP" \
+        --deployment-rollback-tolerance "$MODE_DEPLOYMENT_ROLLBACK_TOLERANCE" \
         --eval-interval "$BASELINE_AGGREGATION_INTERVAL" \
         --batch-size 64 \
         --eval-episodes "$EVAL_EPISODES" \
@@ -184,7 +242,9 @@ python3 scripts/plot_fedrl_heterogeneous.py \
   --out-dir "$COMPARISON_OUT_DIR" \
   --plot-kind comparison \
   --x-axis "$PLOT_X_AXIS" \
-  --metric "$PLOT_METRIC"
+  --metric "$PLOT_METRIC" \
+  --variance "$PLOT_VARIANCE" \
+  --smooth-window "$PLOT_SMOOTH_WINDOW"
 
 python3 scripts/plot_fedrl_heterogeneous.py \
   --fed-log-dir "$LOG_DIR" \
@@ -193,7 +253,9 @@ python3 scripts/plot_fedrl_heterogeneous.py \
   --out-dir "$CANDIDATE_OUT_DIR" \
   --plot-kind comparison \
   --x-axis "$PLOT_X_AXIS" \
-  --metric candidate
+  --metric candidate \
+  --variance "$PLOT_VARIANCE" \
+  --smooth-window "$PLOT_SMOOTH_WINDOW"
 
 python3 scripts/plot_fedrl_heterogeneous.py \
   --fed-log-dir "$LOG_DIR" \
@@ -202,7 +264,9 @@ python3 scripts/plot_fedrl_heterogeneous.py \
   --out-dir "$ABLATION_OUT_DIR" \
   --plot-kind ablation \
   --x-axis "$PLOT_X_AXIS" \
-  --metric "$PLOT_METRIC"
+  --metric "$PLOT_METRIC" \
+  --variance "$PLOT_VARIANCE" \
+  --smooth-window "$PLOT_SMOOTH_WINDOW"
 
 python3 scripts/summarize_fedrl_results.py \
   --fed-log-dir "$LOG_DIR" \
