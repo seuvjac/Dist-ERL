@@ -35,7 +35,7 @@ def parse_args():
     p.add_argument('--smooth-window', type=int, default=1,
                    help='Moving-average window over interpolated plotting points; 1 disables smoothing')
     p.add_argument('--style', default='reference', choices=['reference', 'standard'],
-                   help='reference uses a seaborn-like gray grid, faint raw traces, and thick smoothed lines')
+                   help='reference uses a white grid, faint raw traces, and thick smoothed lines')
     p.add_argument('--raw-traces', action=argparse.BooleanOptionalAction, default=True,
                    help='Draw faint unsmoothed traces behind the smoothed mean curve')
     return p.parse_args()
@@ -75,14 +75,14 @@ def _apply_plot_style(style):
         return
     plt.rcParams.update({
         'figure.facecolor': 'white',
-        'axes.facecolor': '#EAEAF2',
-        'axes.edgecolor': 'white',
+        'axes.facecolor': 'white',
+        'axes.edgecolor': '#d7dbe6',
         'axes.labelcolor': '#2f3640',
         'axes.titlecolor': '#1f2933',
         'axes.grid': True,
-        'grid.color': 'white',
-        'grid.linewidth': 1.1,
-        'grid.alpha': 1.0,
+        'grid.color': '#d7dbe6',
+        'grid.linewidth': 0.9,
+        'grid.alpha': 0.8,
         'xtick.color': '#4b5563',
         'ytick.color': '#4b5563',
         'font.size': 11,
@@ -261,9 +261,9 @@ def main():
             continue
         fig, ax = plt.subplots(figsize=(10, 6))
         if args.style == 'reference':
-            ax.set_facecolor('#EAEAF2')
+            ax.set_facecolor('white')
             for spine in ax.spines.values():
-                spine.set_color('white')
+                spine.set_color('#d7dbe6')
             ax.set_axisbelow(True)
         labels = sorted({r['label'] for r in env_runs})
         if args.target_x is not None:
@@ -346,7 +346,7 @@ def main():
         ylabel = 'Evaluation return' if args.metric == 'current' else 'Best evaluation score'
         ax.set_ylabel(ylabel)
         if args.style == 'reference':
-            ax.grid(True, color='white', linewidth=1.1, alpha=1.0)
+            ax.grid(True, color='#d7dbe6', linewidth=0.9, alpha=0.8)
             ax.margins(x=0.0)
             ax.legend(fontsize=8, framealpha=0.86)
         else:
