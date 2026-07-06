@@ -173,6 +173,7 @@ def _apply_classic_control_heterogeneity(
         'Hopper-v5',
         'Swimmer-v5',
         'Reacher-v5',
+        'Walker2d-v5',
     ):
         scale_boost = 1.8 if mode == 'mixed' else 1.0
         if hasattr(base, 'model'):

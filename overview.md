@@ -6,7 +6,7 @@
 
 ```text
 Swimmer-v5
-Reacher-v5
+Walker2d-v5
 Hopper-v5
 ```
 
@@ -17,7 +17,7 @@ Hopper-v5
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
 | `Swimmer-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
-| `Reacher-v5` | continuous | body mass、joint damping、geom friction、observation/reward/action perturbation |
+| `Walker2d-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 | `Hopper-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
 
 当前在每个原始环境上定义三种异质联邦场景：
@@ -48,7 +48,7 @@ FedEvoSAC
 
 ```text
 Swimmer-v5
-Reacher-v5
+Walker2d-v5
 Hopper-v5
 ```
 
@@ -73,7 +73,7 @@ FedEvoSAC
 主入口：
 
 ```bash
-python -m src.main --mode fed_evo_rl --algorithm SAC --env Reacher-v5
+python -m src.main --mode fed_evo_rl --algorithm SAC --env Walker2d-v5
 ```
 
 ## 4. 算法流程
@@ -317,7 +317,7 @@ TARGET_ENV_STEPS=459000
 
 ```text
 Swimmer-v5
-Reacher-v5
+Walker2d-v5
 Hopper-v5
 ```
 
@@ -328,14 +328,14 @@ HalfCheetah 已从主实验中移除。此前 Swimmer 从 150+ 掉到 30 左右�
 | 环境 | horizon | FedEvoSAC population | 联邦频率 | client SAC updates | archive validation |
 |------|---------|----------------------|----------|--------------------|-------------------|
 | `Swimmer-v5` | `1000` | `10` | 每 5 代 | `4` | top-2 candidates x 1 episode |
+| `Walker2d-v5` | `1000` | `12` | 每 5 代 | `6` | top-2 candidates x 1 episode |
 | `Hopper-v5` | `1000` | `12` | 每 4 代 | `8` | top-3 candidates x 2 episodes |
-| `Reacher-v5` | `50` | `8` | 每 1 代 | `12` | top-2 candidates x 5 episodes |
 
-三个环境使用相同的 `459000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement；短 horizon Reacher 中则允许更频繁的 SAC refinement。
+三个环境使用相同的 `459000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement。
 
 Swimmer 对早期 federation 较敏感。当前只在 `Swimmer-v5` 上启用 warm-up：前 `2` 次 federated aggregation 使用 `batch_zscore` score normalization，并跳过 Fed-to-EA injection，只记录 candidate validation；第 3 次起恢复 `relative_gain` 聚合和正常 injection。`FedEvoSAC-raw_softmax` 消融不使用该 warm-up，保持原始 raw reward softmax 路径。
 
-Reacher 的目标位置和短 horizon 会放大 evaluation 波动，因此当前启用 risk-aware archive：archive 排序使用 `mean_return - 0.5 * eval_std`，Fed-to-EA injection 也使用相同的 std penalty 做候选验收。这样不是简单抹平曲线，而是让高均值但高不确定性的 actor 不轻易成为 deployable policy。Hopper 的 `1000+` 回报在 MuJoCo Hopper 中并非异常上界，但仍偏中等，因此 Hopper 使用更大的 population、更频繁但更温和的 federated refinement 和更低 reset mutation 来尝试提高最终回报。Swimmer 的 SAC baselines 在无异质设置下天然容易重合；runner 对 FedAvg、FedBest、FedSoftmax 和 Median 使用 mode-specific server learning rate / temperature / critic warm-up，使不同聚合思想的学习过程更可见，同时不改变它们的 RL 主体。
+Reacher 已从主环境中移出。它的短 horizon 和 dense distance reward 更适合作调试 SAC 稳定性，不适合作为 EA+FedSAC 的核心证据：FedEvoSAC 的 population search 优势容易被短任务的快速局部优化掩盖，且 evaluation variance 会显著影响结论。当前改用 `Walker2d-v5`，它同样是 MuJoCo 连续控制，但 horizon 更长、动作维度更高、步态探索更依赖 actor 多样性，更适合检验 EA + federated SAC。Hopper 的 `1000+` 回报在 MuJoCo Hopper 中并非异常上界，但仍偏中等，因此 Hopper 保留为可继续提分的 locomotion 任务。
 
 输出三类结果：
 
@@ -407,7 +407,7 @@ BUDGET_PRESET=full ./run_continuous_fedevosac_suite.sh
 
 ```bash
 python -m src.main \
-  --env Reacher-v5 \
+  --env Walker2d-v5 \
   --mode fed_evo_rl \
   --algorithm SAC \
   --population-size 4 \
@@ -447,13 +447,13 @@ python -m src.main \
 - reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
 - reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；当前连续证据来自 `Swimmer-v5`、`Reacher-v5` 和 `Hopper-v5`。无异质结果先验证学习能力，之后再逐级加入 mild / mixed heterogeneity。
+最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；当前连续证据来自 `Swimmer-v5`、`Walker2d-v5` 和 `Hopper-v5`。无异质结果先验证学习能力，之后再逐级加入 mild / mixed heterogeneity。
 
 ## 12. 当前实现状态
 
 已完成：
 
-- 连续环境主线：`Swimmer-v5`、`Reacher-v5`、`Hopper-v5`；
+- 连续环境主线：`Swimmer-v5`、`Walker2d-v5`、`Hopper-v5`；
 - `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；

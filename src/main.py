@@ -44,6 +44,7 @@ FED_EVOFSAC_ENVS = ('CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-
 FED_EVOSAC_ENVS = (
     'Swimmer-v5',
     'Reacher-v5',
+    'Walker2d-v5',
     'Hopper-v5',
 )
 
