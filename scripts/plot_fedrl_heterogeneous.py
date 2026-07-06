@@ -34,6 +34,10 @@ def parse_args():
                    help='Uncertainty band source: across seeds, within-run evaluation std, both, or none')
     p.add_argument('--smooth-window', type=int, default=1,
                    help='Moving-average window over interpolated plotting points; 1 disables smoothing')
+    p.add_argument('--style', default='reference', choices=['reference', 'standard'],
+                   help='reference uses a seaborn-like gray grid, faint raw traces, and thick smoothed lines')
+    p.add_argument('--raw-traces', action=argparse.BooleanOptionalAction, default=True,
+                   help='Draw faint unsmoothed traces behind the smoothed mean curve')
     return p.parse_args()
 
 
@@ -64,6 +68,28 @@ def _smooth_nan(values, window):
     out = np.divide(num, den, out=np.full_like(arr, np.nan), where=den > 0)
     out[~finite & (den <= 0)] = np.nan
     return out
+
+
+def _apply_plot_style(style):
+    if style != 'reference':
+        return
+    plt.rcParams.update({
+        'figure.facecolor': 'white',
+        'axes.facecolor': '#EAEAF2',
+        'axes.edgecolor': 'white',
+        'axes.labelcolor': '#2f3640',
+        'axes.titlecolor': '#1f2933',
+        'axes.grid': True,
+        'grid.color': 'white',
+        'grid.linewidth': 1.1,
+        'grid.alpha': 1.0,
+        'xtick.color': '#4b5563',
+        'ytick.color': '#4b5563',
+        'font.size': 11,
+        'legend.frameon': True,
+        'legend.facecolor': 'white',
+        'legend.edgecolor': '#d7dbe6',
+    })
 
 
 def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'):
@@ -164,6 +190,7 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
 
 def main():
     args = parse_args()
+    _apply_plot_style(args.style)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     log_dirs = [args.fed_log_dir]
@@ -215,11 +242,29 @@ def main():
         'ContextFed-SAC-lite': '#44AA99',
         'FedAvg-DQN': '#117733',
     }
+    line_styles = {
+        'FedEvoFSAC-full': '-',
+        'FedEvoSAC-full': '-',
+        'FedEvoFSAC-raw_softmax': '-.',
+        'FedEvoSAC-raw_softmax': '-.',
+        'FedAvg-SAC': ':',
+        'FedSoftmax-SAC-noEA': '--',
+        'FedBest-SAC': '-.',
+        'RobustFed-SAC-Median': '--',
+        'RobustFed-SAC-TrimmedMean': '-.',
+        'ContextFed-SAC-lite': '--',
+        'FedAvg-DQN': ':',
+    }
     for env in envs:
         env_runs = [r for r in runs if r['env'] == env]
         if not env_runs:
             continue
         fig, ax = plt.subplots(figsize=(10, 6))
+        if args.style == 'reference':
+            ax.set_facecolor('#EAEAF2')
+            for spine in ax.spines.values():
+                spine.set_color('white')
+            ax.set_axisbelow(True)
         labels = sorted({r['label'] for r in env_runs})
         if args.target_x is not None:
             plot_max_x = float(args.target_x)
@@ -239,6 +284,16 @@ def main():
                 std_vals[xs < run['x'][0]] = np.nan
                 interpolated.append(vals)
                 interpolated_stds.append(std_vals)
+                if args.raw_traces and args.style == 'reference':
+                    ax.plot(
+                        xs,
+                        vals,
+                        color=colors.get(label),
+                        linestyle=line_styles.get(label, '-'),
+                        linewidth=1.0,
+                        alpha=0.14,
+                        zorder=1,
+                    )
             mat = np.vstack(interpolated)
             std_mat = np.vstack(interpolated_stds)
             y = np.nanmean(mat, axis=0)
@@ -254,9 +309,26 @@ def main():
                 s = seed_s
             y = _smooth_nan(y, args.smooth_window)
             s = _smooth_nan(s, args.smooth_window)
-            ax.plot(xs, y, label=f"{label} (n={len(group)})", color=colors.get(label), linewidth=2)
-            if np.nanmax(s) > 0:
-                ax.fill_between(xs, y - s, y + s, color=colors.get(label), alpha=0.14)
+            if np.isfinite(s).any() and np.nanmax(s) > 0:
+                ax.fill_between(
+                    xs,
+                    y - s,
+                    y + s,
+                    color=colors.get(label),
+                    alpha=0.18 if args.style == 'reference' else 0.14,
+                    linewidth=0,
+                    zorder=2,
+                )
+            ax.plot(
+                xs,
+                y,
+                label=f"{label} (n={len(group)})",
+                color=colors.get(label),
+                linestyle=line_styles.get(label, '-'),
+                linewidth=2.8 if args.style == 'reference' else 2,
+                solid_capstyle='round',
+                zorder=3,
+            )
         if args.plot_kind == 'ablation':
             title = f'{env}: FedEvoFSAC ablations'
         else:
@@ -273,8 +345,13 @@ def main():
         ax.set_xlabel(xlabel)
         ylabel = 'Evaluation return' if args.metric == 'current' else 'Best evaluation score'
         ax.set_ylabel(ylabel)
-        ax.grid(alpha=0.3)
-        ax.legend(fontsize=8)
+        if args.style == 'reference':
+            ax.grid(True, color='white', linewidth=1.1, alpha=1.0)
+            ax.margins(x=0.0)
+            ax.legend(fontsize=8, framealpha=0.86)
+        else:
+            ax.grid(alpha=0.3)
+            ax.legend(fontsize=8)
         fig.tight_layout()
         fig.savefig(out / f'{env.replace("/", "_")}_comparison.png', dpi=180, bbox_inches='tight')
         plt.close(fig)
