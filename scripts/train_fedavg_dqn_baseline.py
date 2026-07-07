@@ -58,7 +58,8 @@ def parse_args():
     p.add_argument('--client-heterogeneity', type=float, default=0.25)
     p.add_argument('--client-heterogeneity-mode', default='env_params_only',
                    choices=['none', 'reward_action_noise', 'env_params',
-                            'env_params_only', 'mixed'])
+                            'env_params_only', 'mixed',
+                            'reward_scale_only', 'env_params_reward_scale'])
     p.add_argument('--eval-interval', type=int, default=5)
     p.add_argument('--eval-episodes', type=int, default=5)
     p.add_argument('--log-dir', default='logs/logs_dqn_fedrl')

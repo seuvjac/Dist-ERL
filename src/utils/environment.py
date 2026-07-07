@@ -29,8 +29,8 @@ warnings.filterwarnings('ignore', category=DeprecationWarning, module='gymnasium
 
 
 def _client_phase(client_id: int) -> float:
-    """Symmetric client phases; first four clients cover both easier/harder sides."""
-    phases = (-1.0, -1.0 / 3.0, 1.0 / 3.0, 1.0, -2.0 / 3.0, 0.0, 2.0 / 3.0)
+    """Symmetric client phases; the first three clients cover low/mid/high."""
+    phases = (-1.0, 0.0, 1.0, -1.0 / 3.0, 1.0 / 3.0, -2.0 / 3.0, 2.0 / 3.0)
     return phases[int(client_id) % len(phases)]
 
 
@@ -55,8 +55,21 @@ class HeterogeneousClientEnv(gym.Wrapper):
         self.mode = mode
         phase = _client_phase(self.client_id)
         noisy_mode = mode in ('reward_action_noise', 'mixed', 'env_params')
-        self.reward_scale = 1.0 + (0.15 * self.heterogeneity * phase if noisy_mode else 0.0)
-        self.reward_bias = 0.02 * self.heterogeneity * phase if noisy_mode else 0.0
+        reward_scale_mode = mode in (
+            'reward_action_noise',
+            'mixed',
+            'env_params',
+            'reward_scale_only',
+            'env_params_reward_scale',
+        )
+        if mode in ('reward_scale_only', 'env_params_reward_scale'):
+            reward_range = 1.0 + 2.0 * self.heterogeneity
+            self.reward_scale = float(np.exp(phase * np.log(max(1.0, reward_range))))
+            self.reward_scale = float(np.clip(self.reward_scale, 0.2, 5.0))
+            self.reward_bias = 0.0
+        else:
+            self.reward_scale = 1.0 + (0.15 * self.heterogeneity * phase if reward_scale_mode else 0.0)
+            self.reward_bias = 0.02 * self.heterogeneity * phase if reward_scale_mode else 0.0
         noise_boost = 2.5 if mode == 'mixed' else 1.0
         if self.env.unwrapped.__class__.__name__.lower().startswith('lunar'):
             noise_boost *= 1.25
@@ -99,7 +112,7 @@ class HeterogeneousClientEnv(gym.Wrapper):
 
 def _client_env_kwargs(env_name: str, client_id: int, heterogeneity: float, mode: str) -> Dict[str, Any]:
     """Best-effort Gymnasium kwargs for literature-style client heterogeneity."""
-    if heterogeneity <= 0 or mode in ('none', 'reward_action_noise'):
+    if heterogeneity <= 0 or mode in ('none', 'reward_action_noise', 'reward_scale_only'):
         return {}
     phase = _client_phase(client_id)
     strength = float(heterogeneity) * phase
@@ -124,7 +137,7 @@ def _apply_classic_control_heterogeneity(
     heterogeneity: float,
     mode: str,
 ) -> None:
-    if heterogeneity <= 0 or mode in ('none', 'reward_action_noise'):
+    if heterogeneity <= 0 or mode in ('none', 'reward_action_noise', 'reward_scale_only'):
         return
     phase = _client_phase(client_id)
     strength = float(heterogeneity) * phase
@@ -245,7 +258,11 @@ def make_env(
         _apply_classic_control_heterogeneity(
             env, env_name, client_id, heterogeneity, heterogeneity_mode)
     if client_id is not None and heterogeneity > 0 and heterogeneity_mode in (
-        'reward_action_noise', 'mixed', 'env_params'
+        'reward_action_noise',
+        'mixed',
+        'env_params',
+        'reward_scale_only',
+        'env_params_reward_scale',
     ):
         env = HeterogeneousClientEnv(env, client_id, heterogeneity, heterogeneity_mode)
     return env

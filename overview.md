@@ -16,9 +16,9 @@ Hopper-v5
 
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
-| `Swimmer-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
-| `Walker2d-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
-| `Hopper-v5` | continuous | gravity、body mass、joint damping、geom friction、observation/reward/action perturbation |
+| `Swimmer-v5` | continuous | gravity、body mass、joint damping、geom friction、reward scale、observation/action perturbation |
+| `Walker2d-v5` | continuous | gravity、body mass、joint damping、geom friction、reward scale、observation/action perturbation |
+| `Hopper-v5` | continuous | gravity、body mass、joint damping、geom friction、reward scale、observation/action perturbation |
 
 当前在每个原始环境上定义三种异质联邦场景：
 
@@ -26,9 +26,11 @@ Hopper-v5
 |------|-----------------------------|------|------|
 | `dynamics_mild` | `env_params_only` | `0.25` | 只改变客户端物理参数，如 gravity、mass、length、wind |
 | `sensor_reward` | `reward_action_noise` | `0.35` | 原始动力学不变，只改变观测噪声、reward scale/bias 和 seed stream |
+| `reward_scale_ablation` | `reward_scale_only` | `1.00` | 原始动力学不变，3 个 worker 的 reward scale 约为 `1/3, 1, 3`，专门检验 raw-softmax 是否会偏向高 reward-scale client |
+| `dynamics_reward_scale` | `env_params_reward_scale` | `1.00` | 同时改变动力学参数和 reward scale；训练 client non-IID，但最终仍在统一标准环境上评估 |
 | `mixed_hard` | `mixed` | `0.50`-`0.60` | 同时改变动力学参数与观测/奖励/动作扰动，作为最难异质场景；主实验先使用 no-heterogeneity / mild dynamics，hard mixed 作为压力测试 |
 
-这样可以区分三类问题：动力学 non-IID、感知/奖励 non-IID，以及混合强异质 non-IID。
+这样可以区分四类问题：动力学 non-IID、感知/奖励 non-IID、reward-scale non-IID，以及混合强异质 non-IID。`reward_scale_ablation` / `dynamics_reward_scale` 主要用于 FedEvoSAC 内部消融，不作为唯一主结论环境。
 
 ## 2. 当前主线算法：FedEvoSAC
 
