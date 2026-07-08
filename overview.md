@@ -119,9 +119,8 @@ python -m src.main --mode fed_evo_rl --algorithm SAC --env Walker2d-v5
 
 6. **联邦 actor 聚合**
    - server 对 client 上传的 actor update 做 reward-aware aggregation；
-   - 默认使用 hybrid reward-aware softmax、低分 client 过滤和 delta norm clipping；
-   - 每个 client 维护本地 reward EMA / std，relative 分量使用相对提升 `(reward_i - EMA_i) / std_i`，避免 reward scale 大的 client 天然支配聚合；
-   - hybrid 分数再混入一部分 raw batch-z reward，并通过 `--fed-score-hybrid-scale` 保留 softmax 选择压力，避免纯 relative-gain 过于接近 uniform；
+   - 默认使用 normalized relative softmax 权重、低分 client 过滤和 delta norm clipping；
+   - 每个 client 维护本地 reward EMA / std，聚合分数使用相对提升 `(reward_i - EMA_i) / std_i`，避免 reward scale 大的 client 天然支配聚合；
    - 聚合时以当前 best actor 为中心聚合 delta，避免直接平均完整 actor 造成大幅漂移。
 
 7. **RL-to-EA soft injection 和 deployable policy**
@@ -207,9 +206,7 @@ FedEvoSAC 聚合的是 client 上传的 actor 参数，不聚合 trajectory，�
 | 机制 | 参数 | 作用 |
 |------|------|------|
 | 每代聚合 | `--fed-aggregation-interval 1` | 短预算下保证 SAC 持续参与；长预算可调大 |
-| hybrid reward-aware softmax | `--fed-score-normalization hybrid` | 默认 full 聚合；`relative_gain` 负责尺度校正，raw batch-z 分量保留选择压力 |
-| hybrid raw weight | `--fed-score-hybrid-raw-weight 0.35` | 控制 raw batch-z reward 在 hybrid 分数中的占比 |
-| hybrid score scale | `--fed-score-hybrid-scale 50` | 放大 hybrid score，避免 softmax 权重退化成接近 uniform |
+| normalized relative softmax | `--fed-score-normalization relative_gain` | 用 client 相对提升而不是 raw reward 计算聚合权重 |
 | 温度控制 | `--fed-aggregation-temperature 75` | 防止单个 client 过度支配 |
 | reward scale EMA | `--fed-score-ema-beta 0.90` | 维护每个 client 的 reward baseline / scale |
 | raw softmax 消融 | `--fed-ablation raw_softmax` | 保留原始 reward softmax，用于验证归一化聚合贡献 |
@@ -226,7 +223,7 @@ theta_fed = theta_best + sum_i w_i * delta_i
 
 这比直接平均完整 actor 更稳。
 
-默认 `FedEvoSAC-full` 使用 hybrid reward-aware softmax。`FedEvoSAC-raw_softmax` 作为消融保留旧版 raw reward softmax，用来回答：在 client reward scale 异质时，只依赖 raw episodic return 是否会比 hybrid 校正更不稳定。
+默认 `FedEvoSAC-full` 使用 normalized relative softmax。`FedEvoSAC-raw_softmax` 作为消融保留旧版 raw reward softmax，用来回答：在 client reward scale 异质时，按相对提升归一化是否比直接用 episodic return 更稳定。
 
 ## 9. Baseline 和对比曲线
 
@@ -338,7 +335,7 @@ HalfCheetah 已从主实验中移除。此前 Swimmer 从 150+ 掉到 30 左右�
 
 三个环境使用相同的 `459000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement。
 
-Swimmer 对早期 federation 较敏感。当前只在 `Swimmer-v5` 上启用 warm-up：前 `2` 次 federated aggregation 使用 `batch_zscore` score normalization，并跳过 Fed-to-EA injection，只记录 candidate validation；第 3 次起恢复 `hybrid` 聚合和正常 injection。`FedEvoSAC-raw_softmax` 消融不使用该 warm-up，保持原始 raw reward softmax 路径。
+Swimmer 对早期 federation 较敏感。当前只在 `Swimmer-v5` 上启用 warm-up：前 `2` 次 federated aggregation 使用 `batch_zscore` score normalization，并跳过 Fed-to-EA injection，只记录 candidate validation；第 3 次起恢复 `relative_gain` 聚合和正常 injection。`FedEvoSAC-raw_softmax` 消融不使用该 warm-up，保持原始 raw reward softmax 路径。
 
 Reacher 已从主环境中移出。它的短 horizon 和 dense distance reward 更适合作调试 SAC 稳定性，不适合作为 EA+FedSAC 的核心证据：FedEvoSAC 的 population search 优势容易被短任务的快速局部优化掩盖，且 evaluation variance 会显著影响结论。当前改用 `Walker2d-v5`，它同样是 MuJoCo 连续控制，但 horizon 更长、动作维度更高、步态探索更依赖 actor 多样性，更适合检验 EA + federated SAC。Hopper 的 `1000+` 回报在 MuJoCo Hopper 中并非异常上界，但仍偏中等，因此 Hopper 保留为可继续提分的 locomotion 任务。
 
@@ -463,7 +460,7 @@ python -m src.main \
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；
 - GA actor 前缀可配置且当前固定为 `actor.`；
-- hybrid reward-aware federated actor aggregation；
+- normalized relative reward-aware federated actor aggregation；
 - delta clipping 与 bounded EA mutation；
 - global elite archive；
 - FedEvoSAC 连续对比和消融脚本；
@@ -473,6 +470,6 @@ python -m src.main \
 
 - 连续控制环境训练方差更大，Hopper 仍需要更长预算和多 seed 统计；
 - actor-only 共享更稳，但 client critic 完全本地化，早期本地更新可能噪声较大；
-- raw reward softmax 容易受异质 client reward scale 影响；当前 full 已改用 hybrid reward-aware softmax，但仍需要通过 `raw_softmax` 消融、`aggregation_entropy` 和 `aggregation_score_std` 验证稳定性；
+- raw reward softmax 容易受异质 client reward scale 影响；当前 full 已改用 normalized relative softmax，但仍需要通过 `raw_softmax` 消融、`aggregation_entropy` 和 `aggregation_score_std` 验证稳定性；
 - MuJoCo 异质性过强时会改变最优动作尺度，EA mutation、action noise 和 SAC temperature 需要联动调参；
 - 当前 privacy 是 trajectory-private，不是 differential privacy 或 secure aggregation。

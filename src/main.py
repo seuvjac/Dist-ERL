@@ -113,22 +113,18 @@ def parse_args():
                         help='Run federated local train/aggregation every K generations')
     parser.add_argument('--fed-aggregation-temperature', type=float, default=75.0,
                         help='Softmax temperature for fitness-weighted client aggregation')
-    parser.add_argument('--fed-score-normalization', type=str, default='hybrid',
-                        choices=['raw', 'batch_zscore', 'relative_gain', 'hybrid', 'uniform'],
+    parser.add_argument('--fed-score-normalization', type=str, default='relative_gain',
+                        choices=['raw', 'batch_zscore', 'relative_gain', 'uniform'],
                         help='Normalize client rewards before reward-aware aggregation')
     parser.add_argument('--fed-score-warmup-rounds', type=int, default=0,
                         help='Use --fed-score-warmup-normalization for the first N federated rounds')
     parser.add_argument('--fed-score-warmup-normalization', type=str, default='batch_zscore',
-                        choices=['raw', 'batch_zscore', 'relative_gain', 'hybrid', 'uniform'],
+                        choices=['raw', 'batch_zscore', 'relative_gain', 'uniform'],
                         help='Temporary score normalization during early federated rounds')
     parser.add_argument('--fed-score-ema-beta', type=float, default=0.9,
                         help='EMA beta for per-client reward baseline in relative_gain aggregation')
     parser.add_argument('--fed-score-min-std', type=float, default=1.0,
                         help='Minimum per-client reward std used by relative_gain aggregation')
-    parser.add_argument('--fed-score-hybrid-raw-weight', type=float, default=0.35,
-                        help='Raw batch-z score weight in hybrid reward aggregation')
-    parser.add_argument('--fed-score-hybrid-scale', type=float, default=50.0,
-                        help='Scale applied to hybrid scores to preserve softmax selection pressure')
     parser.add_argument('--fed-min-client-score-quantile', type=float, default=0.25,
                         help='Drop selected client uploads below this reward quantile before aggregation')
     parser.add_argument('--fed-delta-clip-norm', type=float, default=5.0,
@@ -357,8 +353,6 @@ def _aggregation_scores_from_rewards(
     mode: str,
     ema_beta: float,
     min_std: float,
-    hybrid_raw_weight: float = 0.35,
-    hybrid_scale: float = 50.0,
 ):
     """Return aggregation scores and update per-client reward scale statistics."""
     if not rewards:
@@ -366,13 +360,12 @@ def _aggregation_scores_from_rewards(
     raw = np.asarray(rewards, dtype=np.float64)
     indices = [int(i) for i in client_indices]
     mode = str(mode)
-    raw_z = (raw - raw.mean()) / (raw.std() + 1e-8)
     if mode == 'raw':
         scores = raw.copy()
     elif mode == 'uniform':
         scores = np.zeros_like(raw)
     elif mode == 'batch_zscore':
-        scores = raw_z
+        scores = (raw - raw.mean()) / (raw.std() + 1e-8)
     else:
         vals = []
         floor = max(1e-8, float(min_std))
@@ -381,15 +374,8 @@ def _aggregation_scores_from_rewards(
                 scale = max(floor, float(np.sqrt(max(reward_var[idx], 0.0))))
                 vals.append((float(reward) - float(reward_mean[idx])) / scale)
             else:
-                vals.append(float(raw_z[len(vals)]))
-        relative = np.asarray(vals, dtype=np.float64)
-        if mode == 'hybrid':
-            rel_z = (relative - relative.mean()) / (relative.std() + 1e-8)
-            raw_weight = float(np.clip(hybrid_raw_weight, 0.0, 1.0))
-            mixed = (1.0 - raw_weight) * rel_z + raw_weight * raw_z
-            scores = float(max(1e-8, hybrid_scale)) * mixed
-        else:
-            scores = relative
+                vals.append(0.0)
+        scores = np.asarray(vals, dtype=np.float64)
 
     beta = float(np.clip(ema_beta, 0.0, 0.999))
     floor_var = max(1e-8, float(min_std) ** 2)
@@ -546,8 +532,6 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             aggregation_score_mode,
             args.fed_score_ema_beta,
             args.fed_score_min_std,
-            args.fed_score_hybrid_raw_weight,
-            args.fed_score_hybrid_scale,
         ) if client_rewards else []
         if client_rewards:
             q = float(np.clip(args.fed_min_client_score_quantile, 0.0, 1.0))
