@@ -335,6 +335,14 @@ HalfCheetah 已从主实验中移除。此前 Swimmer 从 150+ 掉到 30 左右�
 
 三个环境使用相同的 `459000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement。
 
+为了降低无意义的 evaluation 方差，同时保留可检验的 FedEvoSAC 消融差异，当前调参版允许每个环境单独设置 client heterogeneity。推荐设置为：
+
+| 环境 | `client_heterogeneity` | `client_heterogeneity_mode` | 目的 |
+|------|------------------------|-----------------------------|------|
+| `Swimmer-v5` | `0.0` | `none` | Swimmer 对 reward-scale / dynamics perturbation 极敏感；先作为稳定 locomotion sanity 环境 |
+| `Walker2d-v5` | `0.0` | `none` | 保持旧版 full > raw-softmax 的稳定消融关系 |
+| `Hopper-v5` | `0.25` | `env_params_only` | 使用 mild dynamics heterogeneity，避免 reward-scale 引入过大的 eval 方差 |
+
 Swimmer 对早期 federation 较敏感。当前只在 `Swimmer-v5` 上启用 warm-up：前 `2` 次 federated aggregation 使用 `batch_zscore` score normalization，并跳过 Fed-to-EA injection，只记录 candidate validation；第 3 次起恢复 `relative_gain` 聚合和正常 injection。`FedEvoSAC-raw_softmax` 消融不使用该 warm-up，保持原始 raw reward softmax 路径。
 
 Reacher 已从主环境中移出。它的短 horizon 和 dense distance reward 更适合作调试 SAC 稳定性，不适合作为 EA+FedSAC 的核心证据：FedEvoSAC 的 population search 优势容易被短任务的快速局部优化掩盖，且 evaluation variance 会显著影响结论。当前改用 `Walker2d-v5`，它同样是 MuJoCo 连续控制，但 horizon 更长、动作维度更高、步态探索更依赖 actor 多样性，更适合检验 EA + federated SAC。Hopper 的 `1000+` 回报在 MuJoCo Hopper 中并非异常上界，但仍偏中等，因此 Hopper 保留为可继续提分的 locomotion 任务。
