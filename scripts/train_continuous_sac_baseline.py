@@ -27,6 +27,8 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument('--env', default='Reacher-v5')
     p.add_argument('--seed', type=int, default=0)
+    p.add_argument('--repeat-id', default='')
+    p.add_argument('--seed-slot', type=int, default=-1)
     p.add_argument('--rounds', type=int, default=120)
     p.add_argument('--target-env-steps', type=int, default=0)
     p.add_argument('--num-workers', type=int, default=4)
@@ -204,6 +206,7 @@ def main():
         args.aggregation_eval_episodes)
     total_steps += initial_eval_steps
     round_idx = 0
+    communication_round = 0
     while (
         (args.target_env_steps > 0 and total_steps < args.target_env_steps)
         or (args.target_env_steps <= 0 and round_idx < args.rounds)
@@ -261,6 +264,7 @@ def main():
         proposal_mean = np.nan
         proposal_std = np.nan
         if aggregate_now:
+            communication_round += 1
             aggregated_state, entropy = _aggregate_actor_state(
                 policies, scores, args.baseline_mode, args.federated_temperature)
             proposed_state = _blend_actor_states(
@@ -313,6 +317,7 @@ def main():
                 best_actor_state = {key: value.clone() for key, value in global_actor_state.items()}
             _write_row(metrics_path, {
                 'generation': round_idx,
+                'communication_round': communication_round,
                 'total_env_steps': total_steps,
                 'eval_reward_mean': deploy_mean,
                 'eval_reward_std': deploy_std,

@@ -305,14 +305,14 @@ FedAvg-DQN
 ./run_continuous_fedevosac_suite.sh
 ```
 
-当前三环境诊断主实验默认使用无异质设置，先验证算法本身的学习与聚合稳定性：
+当前三环境主实验使用按环境设置的异质性，并以两个独立 seed 为一个最小统计单元：
 
 ```text
 CLIENT_HETEROGENEITY=0.0
 CLIENT_HETEROGENEITY_MODE=none
 NUM_WORKERS=3
-SEEDS=0
-TARGET_ENV_STEPS=459000
+SEEDS="0 1"
+BUDGET_PRESET=converged
 ```
 
 默认连续环境：
@@ -323,38 +323,67 @@ Walker2d-v5
 Hopper-v5
 ```
 
-HalfCheetah 已从主实验中移除。此前 Swimmer 从 150+ 掉到 30 左右，主要不是单纯算法退化，而是实验协议从旧的 `1000` 步 episode horizon / 更长预算切到 `200` 步 horizon / `120000` step，并且 archive 改成独立 validation 后不再记录乐观 best-so-far。初版修正把 Swimmer/Hopper 恢复到 `1000` 步后仍只到 35 左右，说明另一个关键问题是高频 SAC 注入压缩了 EA 搜索：旧有效 Swimmer 更接近 `population=10`、`fed_aggregation_interval=5`、`client_updates=4` 的 EA 主导形态，而不是每代都做较强 SAC refinement。
+HalfCheetah 已从主实验中移除。旧 `perenv_tuned_s0` 中 Swimmer 达到 `242.70`，但三 seed 结果为 `111.91 +/- 92.52`；逐行检查日志后发现，seed 0 找到高回报 actor，而 seed 1/2 停在约 `50/44`，且三个 run 的 `migrated` 都为 `0`。因此旧好结果主要来自一次成功的 EA 搜索，不足以证明稳定性。新协议不把方差仅当成画图问题，而是同时修正远程 actor 随机种子、停滞恢复、SAC refinement 和训练预算。
 
 当前三环境协议因此改为：
 
 | 环境 | horizon | FedEvoSAC population | 联邦频率 | client SAC updates | archive validation |
 |------|---------|----------------------|----------|--------------------|-------------------|
-| `Swimmer-v5` | `1000` | `10` | 每 5 代 | `4` | top-2 candidates x 1 episode |
+| `Swimmer-v5` | `1000` | `10` | 每 2 代 | `64`，前 48 次 critic-only，actor lr `3e-5` | top-2 candidates x 1 episode |
 | `Walker2d-v5` | `1000` | `12` | 每 5 代 | `6` | top-2 candidates x 1 episode |
 | `Hopper-v5` | `1000` | `12` | 每 4 代 | `8` | top-3 candidates x 2 episodes |
 
-三个环境使用相同的 `459000` 次真实环境交互预算，训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 均计入预算。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement。
+同一环境内所有算法使用相同真实交互预算：三个环境均为 `1,200,000` steps。训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 全部计入预算；提前达到稳定回报的算法仍跑满预算，画图时保持最后一个当前策略回报。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement。
+
+为降低训练方差而不改变 FedEvoSAC 的核心结构，新版增加以下约束：
+
+- `EAManager` 和每个 Ray `FederatedClient` 显式接收实验 seed；manager 持有私有 Python/NumPy RNG，并将其传入每一代交叉、变异、immigrant 和 injection，避免 `erl_re2_epoch()` 每代临时创建未受控随机源；
+- archive 连续若干代未达到最小增益时，保留 archive elite，只重置底部 `25%` 个体并增强中部个体变异；Swimmer patience 为 `4` 代，Walker2d/Hopper 为 `8` 代；
+- Swimmer 每 2 代进行一次联邦 refinement，使用更小的 actor learning rate；每次先训练 critic，再做少量 actor 更新，第一次聚合只 warm-up，从第二次开始允许通过独立验证的 actor 注入；
+- Swimmer archive 与 injection 采用跨 client 的 `mean - 0.25 * std` 验收，降低单条幸运轨迹进入 archive 的概率；archive 每代只复评 top-2、每 client 1 episode，把更多固定交互预算用于实际 EA/SAC 学习；
+- `env_params_only` 的扰动只在环境 wrapper 中执行，client 不再重复施加 reward scale/action noise。
+
+Walker2d 的 `relative_gain` 聚合曾经过于接近 uniform averaging，导致 full 消融不能稳定优于 raw-softmax。当前 Walker2d 默认保留 `temperature=60`，并将归一化聚合分数乘以 `fed_score_scale=8.0`，提高 softmax 的有效选择压力；`FedEvoSAC-raw_softmax` 不使用该缩放，仍作为原始 reward-scale 敏感性的消融对照。
 
 为了降低无意义的 evaluation 方差，同时保留可检验的 FedEvoSAC 消融差异，当前调参版允许每个环境单独设置 client heterogeneity。推荐设置为：
 
 | 环境 | `client_heterogeneity` | `client_heterogeneity_mode` | 目的 |
 |------|------------------------|-----------------------------|------|
 | `Swimmer-v5` | `0.0` | `none` | Swimmer 对 reward-scale / dynamics perturbation 极敏感；先作为稳定 locomotion sanity 环境 |
-| `Walker2d-v5` | `0.0` | `none` | 保持旧版 full > raw-softmax 的稳定消融关系 |
+| `Walker2d-v5` | `0.0` | `none` | 不额外加强 dynamics heterogeneity；主要通过 `fed_score_scale=8.0` 修正 near-uniform 聚合 |
 | `Hopper-v5` | `0.25` | `env_params_only` | 使用 mild dynamics heterogeneity，避免 reward-scale 引入过大的 eval 方差 |
 
-Swimmer 对早期 federation 较敏感。当前只在 `Swimmer-v5` 上启用 warm-up：前 `2` 次 federated aggregation 使用 `batch_zscore` score normalization，并跳过 Fed-to-EA injection，只记录 candidate validation；第 3 次起恢复 `relative_gain` 聚合和正常 injection。`FedEvoSAC-raw_softmax` 消融不使用该 warm-up，保持原始 raw reward softmax 路径。
+Swimmer 对早期 federation 较敏感。当前只在 `Swimmer-v5` 上启用 warm-up：第一次 federated aggregation 使用 `batch_zscore` 并跳过 injection；第二次起恢复 `relative_gain`、`fed_score_scale=4` 和正常 injection。`FedEvoSAC-raw_softmax` 消融不使用该 warm-up 和 score scaling，保持原始 raw reward softmax 路径。
 
 Reacher 已从主环境中移出。它的短 horizon 和 dense distance reward 更适合作调试 SAC 稳定性，不适合作为 EA+FedSAC 的核心证据：FedEvoSAC 的 population search 优势容易被短任务的快速局部优化掩盖，且 evaluation variance 会显著影响结论。当前改用 `Walker2d-v5`，它同样是 MuJoCo 连续控制，但 horizon 更长、动作维度更高、步态探索更依赖 actor 多样性，更适合检验 EA + federated SAC。Hopper 的 `1000+` 回报在 MuJoCo Hopper 中并非异常上界，但仍偏中等，因此 Hopper 保留为可继续提分的 locomotion 任务。
 
-输出三类结果：
+正式重复实验使用：
+
+```bash
+EXPERIMENT_ID=fedevosac_20x2_converged_20260714 \
+  ./scripts/run_fedrl_20x2_experiment.sh
+```
+
+`20x2` 表示 20 个 outer repeat，每个 repeat 恰好两个 seed。不同 repeat 使用不同 seed pair：`(0,1), (2,3), ..., (38,39)`，所以每个 repeat 的图是 `n=2`，最终 aggregate 是 40 个独立 seed；不会把完全相同的 seed 重跑 20 次后伪装成更大的独立样本量。脚本支持断点重启，已达到目标 steps 的 run 会自动跳过。
+
+调度器默认每批并行运行 4 个 repeat；每个 repeat 的 stdout 独立写入 `logs/experiments/<experiment_id>/repeat_XX.log`，批内任务全部结束后才重画 aggregate，避免并发覆盖结果。可通过 `PARALLEL_REPEATS` 调整并发度，通过 `START_REPEAT` / `END_REPEAT` 做分片或断点续跑。
+
+每个 repeat 的横向比较运行 `FedEvoSAC-full` 和四个联邦 SAC baseline；独立消融图复用 full，并额外运行 `uniform_aggregation`、`no_local_rl`、`no_ea_injection`、`raw_softmax`。`no_heterogeneity` 不进入本轮统一三环境消融，因为 Swimmer/Walker2d 的主设置本身就是无额外异质扰动，在这两个环境上该曲线会与 full 重复；它只适合另行用于 Hopper 异质性实验。
+
+新结果只写入 `plots_new`，目录结构为：
 
 ```text
-plots/fedevosac_continuous_comparison_round   # FedEvoSAC vs continuous SAC 横向对比
-plots/fedevosac_continuous_candidate_round    # 当前训练 candidate，展示真实学习波动
-plots/fedevosac_continuous_ablations_round    # FedEvoSAC 内部消融
-plots/fedevosac_continuous_tables             # final / best return 表格
+plots_new/<experiment_id>/reference_single_seed/  # 旧 perenv_tuned_s0 图，仅供视觉参考
+plots_new/<experiment_id>/repeats/repeat_XX/      # 每个 n=2 repeat 的图、表与收敛检查
+plots_new/<experiment_id>/aggregate/main/         # round 主对比图
+plots_new/<experiment_id>/aggregate/supplement/   # steps 样本效率图
+plots_new/<experiment_id>/aggregate/diagnostics/  # progress 形状诊断图
+plots_new/<experiment_id>/aggregate/ablation/     # 独立消融图
+plots_new/<experiment_id>/aggregate/paper_figures/# 三环境横向拼图 PNG/PDF
+plots_new/<experiment_id>/aggregate/tables/       # final、best 与 convergence CSV
 ```
+
+旧 `fedevosac_perenv_tuned_s0_comparison` 会原样复制到 `reference_single_seed`，但明确标记为 single-seed reference，不参加新均值、置信区间或显著性统计。
 
 日志与图表目录约定：
 
@@ -362,6 +391,7 @@ plots/fedevosac_continuous_tables             # final / best return 表格
 logs/                 # 所有 metrics、metadata、shell run log
 logs/run/             # 后台/脚本 stdout 日志
 plots/                # 所有对比图、消融图、表格
+plots_new/            # 新 20x2 实验，和历史 plots 完全分开
 plots/training/       # src.main 生成的单次训练过程图
 plots/tables/         # 零散 summary / significance CSV
 ```
@@ -448,16 +478,25 @@ python -m src.main \
 | `candidate_eval_mean` | 当前聚合训练 actor 的固定协议评估回报 |
 | `deployable_eval_mean` | server 历史最佳可部署 actor 的评估回报 |
 | `local_updates_per_worker` | 每轮每个 baseline client 实际执行的本地 SAC 更新数 |
+| `communication_round` | 实际 server-client 协调轮数；FedEvoSAC 每代 population 分发/fitness 回传计 1，baseline 仅 actor 聚合时计 1 |
 | `comm_upload_bytes` | 实际上传 actor 参数量估计 |
 | `comm_full_traj_bytes` | 假设上传完整 trajectory 的通信量估计 |
 
-主曲线默认使用 `eval_reward_mean`，表示 server 当前可部署策略。baseline 的当前训练策略记录在 `candidate_eval_mean`，并单独生成 candidate learning curve；FedEvoSAC 的本地 SAC rollout 分数保存在 `client_reward_mean` / `client_reward_std`。`best_fitness` / `archive_best` 仍作为辅助表格或附图指标，用于解释 EA 搜索过程。FedRL 主文建议优先使用 communication rounds 作为横坐标，因为它直接对应联邦通信效率；raw environment steps 和 normalized progress 作为补充视角：
+主曲线默认使用 `eval_reward_mean`，表示 server 当前可部署策略。baseline 的当前训练策略记录在 `candidate_eval_mean`，并单独生成 candidate learning curve；FedEvoSAC 的本地 SAC rollout 分数保存在 `client_reward_mean` / `client_reward_std`。`best_fitness` / `archive_best` 只作为辅助表格或附图指标，用于解释 EA 搜索过程。
 
-- reward vs communication round / generation：主图，说明联邦通信效率。
-- reward vs raw environment steps：补充图，说明样本效率；所有算法应跑到同一个 step budget，提前收敛时曲线保持最后当前评估值。
-- reward vs normalized progress：只作为可视化辅助，不作为主定量结论。
+三种横坐标回答的是不同问题，不能互相替代：
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round` 和 `wall_time_sec`。离散 CartPole 只作为 sanity check；当前连续证据来自 `Swimmer-v5`、`Walker2d-v5` 和 `Hopper-v5`。无异质结果先验证学习能力，之后再逐级加入 mild / mixed heterogeneity。
+| 横坐标 | 回答的问题 | 论文位置 | 限制 |
+|--------|------------|----------|------|
+| communication round | 达到某个 return 需要多少次真实 server-client 协调，即通信效率 | 主图 | FedEvoSAC 与 baseline 每轮的 payload 和环境交互量不同，不能单独证明样本或字节效率 |
+| counted environment interactions | 在相同真实采样预算下谁学得更快，即样本效率 | 补充主证据 | 必须统计 population、local rollout、archive/candidate validation 的全部交互 |
+| normalized progress (%) | 从该 run 第一次评估的 `0%` 到最后评估的 `100%`，比较学习形状、停滞点和末段稳定性 | 诊断/附录 | 会抹去绝对预算差异，不能据此宣称更高效率 |
+
+这种主图/补充图分层与 FRL 文献的常见结构一致。[Federated Reinforcement Learning with Environment Heterogeneity](https://proceedings.mlr.press/v151/jin22a.html) 在复杂任务中画 averaged return vs episodes/frames，并以均值和 `1.65 x standard error` 阴影展示不确定性，同时单独研究 local-update interval 对通信频率的影响；[Federated Reinforcement Learning: Linear Speedup Under Markovian Sampling](https://proceedings.mlr.press/v162/khodadadian22a.html) 则把 environment iterations/sample complexity 与 communication cost 分开分析。本项目因此输出三环境横向 panel：round 是 main figure，steps 是 supplementary evidence，progress 是 diagnostics。旧日志没有 `communication_round` 时绘图器会回退到 `generation`，仅用于历史图兼容；新实验不使用该回退口径。
+
+新图报告 current policy 的跨 seed 均值和 90% normal-approximation CI（样本标准差 `ddof=1`，阴影为 `1.645 x standard error`），不混入 archive-best 曲线；原始每 seed CSV、seed standard deviation 和无方差图仍保留，可复核置信带。单个 repeat 只有两个 seed，其区间只作运行诊断；正式 aggregate 使用 40 个独立 seed。平滑只作用于显示曲线，不改 summary CSV。每个 run 额外生成 `convergence_report.csv`：最后 6 个评估点的增益和范围必须落在绝对/相对容差内，未通过者不能在论文中标为 converged。
+
+最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round`、`wall_time_sec` 和 convergence 状态。当前连续证据来自 `Swimmer-v5`、`Walker2d-v5` 和 `Hopper-v5`。
 
 ## 12. 当前实现状态
 

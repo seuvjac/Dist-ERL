@@ -49,7 +49,7 @@ FED_EVOSAC_ENVS = (
 )
 
 METRIC_FIELDS = [
-    'generation', 'total_env_steps', 'eval_reward_mean', 'eval_reward_std',
+    'generation', 'communication_round', 'total_env_steps', 'eval_reward_mean', 'eval_reward_std',
     'eval_ea_mean', 'eval_ea_std',
     'best_fitness', 'mean_fitness', 'rl_steps', 'buffer_size',
     'gen_time', 'total_time', 'sync_applied', 'reproduced_trajectories', 'migrated',
@@ -93,6 +93,8 @@ def parse_args():
                         help='Local gradient updates per selected federated client')
     parser.add_argument('--client-critic-warmup-updates', type=int, default=4,
                         help='Critic-only updates after loading the server actor')
+    parser.add_argument('--client-actor-lr', type=float, default=0.0,
+                        help='Optional SAC client actor learning rate; <=0 uses --lr')
     parser.add_argument('--client-heterogeneity', type=float, default=0.2,
                         help='Synthetic client MDP heterogeneity strength')
     parser.add_argument('--client-heterogeneity-mode', type=str, default='env_params',
@@ -125,6 +127,8 @@ def parse_args():
                         help='EMA beta for per-client reward baseline in relative_gain aggregation')
     parser.add_argument('--fed-score-min-std', type=float, default=1.0,
                         help='Minimum per-client reward std used by relative_gain aggregation')
+    parser.add_argument('--fed-score-scale', type=float, default=1.0,
+                        help='Scale non-raw aggregation scores to preserve softmax selection pressure')
     parser.add_argument('--fed-min-client-score-quantile', type=float, default=0.25,
                         help='Drop selected client uploads below this reward quantile before aggregation')
     parser.add_argument('--fed-delta-clip-norm', type=float, default=5.0,
@@ -166,6 +170,10 @@ def parse_args():
     parser.add_argument('--ea-batch-ratio', type=float, default=0.3,
                         help='Fraction of replay batch from EA reproduced transitions')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--repeat-id', type=str, default='',
+                        help='Optional outer-repeat identifier for experiment bookkeeping')
+    parser.add_argument('--seed-slot', type=int, default=-1,
+                        help='Seed position inside an outer repeat')
     parser.add_argument('--stagnation-patience', type=int, default=12,
                         help='Generations without RL eval improvement before diversity boost')
     parser.add_argument('--stagnation-min-delta', type=float, default=5.0,
@@ -226,9 +234,15 @@ def _setup_local_logger(args):
         'env': args.env,
         'algorithm': args.algorithm,
         'seed': args.seed,
+        'repeat_id': args.repeat_id,
+        'seed_slot': args.seed_slot,
         'population_size': args.population_size,
         'num_workers': args.num_workers,
         'max_generations': args.max_generations,
+        'target_env_steps': args.target_env_steps,
+        'max_episode_steps': args.max_episode_steps,
+        'eval_episodes': args.eval_episodes,
+        'batch_size': args.batch_size,
         'sync_interval': args.sync_interval,
         'elite_seeds': args.elite_seeds,
         'rl_updates': args.rl_updates,
@@ -247,6 +261,7 @@ def _setup_local_logger(args):
         'client_rollouts': args.client_rollouts,
         'client_updates': args.client_updates,
         'client_critic_warmup_updates': args.client_critic_warmup_updates,
+        'client_actor_lr': args.client_actor_lr,
         'client_heterogeneity': args.client_heterogeneity,
         'client_heterogeneity_mode': args.client_heterogeneity_mode,
         'fed_aggregation': args.fed_aggregation,
@@ -268,6 +283,10 @@ def _setup_local_logger(args):
         'archive_eval_episodes': args.archive_eval_episodes,
         'archive_std_penalty': args.archive_std_penalty,
         'fed_inject_std_penalty': args.fed_inject_std_penalty,
+        'fed_score_scale': args.fed_score_scale,
+        'stagnation_patience': args.stagnation_patience,
+        'stagnation_min_delta': args.stagnation_min_delta,
+        'immigrant_fraction': args.immigrant_fraction,
     }
     with open(os.path.join(run_dir, 'metadata.json'), 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
@@ -353,6 +372,7 @@ def _aggregation_scores_from_rewards(
     mode: str,
     ema_beta: float,
     min_std: float,
+    score_scale: float = 1.0,
 ):
     """Return aggregation scores and update per-client reward scale statistics."""
     if not rewards:
@@ -376,6 +396,8 @@ def _aggregation_scores_from_rewards(
             else:
                 vals.append(0.0)
         scores = np.asarray(vals, dtype=np.float64)
+    if mode not in ('raw', 'uniform'):
+        scores = scores * float(max(0.0, score_scale))
 
     beta = float(np.clip(ema_beta, 0.0, 0.999))
     floor_var = max(1e-8, float(min_std) ** 2)
@@ -409,6 +431,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         args.elite_fraction,
         args.num_elitists,
         ga_config,
+        args.seed,
     )
     template = build_model_template(
         env_info['state_dim'], env_info['action_dim'], algorithm=args.algorithm,
@@ -427,6 +450,8 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             heterogeneity=args.client_heterogeneity,
             heterogeneity_mode=args.client_heterogeneity_mode,
             policy_exploration_noise=args.policy_exploration_noise,
+            seed=args.seed,
+            actor_lr=args.client_actor_lr if args.client_actor_lr > 0 else None,
         )
         for i in range(args.num_clients)
     ]
@@ -446,6 +471,8 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
     client_reward_seen = np.zeros(args.num_clients, dtype=np.int64)
     cumulative_rl_updates = 0
     fed_aggregation_count = 0
+    stagnation_best = float('-inf')
+    stagnation_count = 0
 
     generation = 0
     while (
@@ -532,10 +559,18 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             aggregation_score_mode,
             args.fed_score_ema_beta,
             args.fed_score_min_std,
+            args.fed_score_scale,
         ) if client_rewards else []
         if client_rewards:
+            # A uniform/FedAvg ablation must include every selected client.
+            # Score-based filtering here would silently turn it into a
+            # trimmed average and invalidate the intended comparison.
             q = float(np.clip(args.fed_min_client_score_quantile, 0.0, 1.0))
-            min_score = float(np.quantile(aggregation_scores, q)) if len(aggregation_scores) > 1 else None
+            min_score = (
+                float(np.quantile(aggregation_scores, q))
+                if args.fed_aggregation != 'uniform' and len(aggregation_scores) > 1
+                else None
+            )
             aggregated = aggregate_weight_dicts(
                 client_weights,
                 aggregation_scores,
@@ -610,6 +645,22 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         client_fitness_values = [r['fitness'] for r in eval_results]
         deployable_eval_mean = float(stats.get('archive_best', stats.get('max_fitness', 0.0)))
         deployable_eval_std = float(stats.get('archive_best_std', 0.0))
+        stagnation_boost = 0
+        if deployable_eval_mean > stagnation_best + max(0.0, args.stagnation_min_delta):
+            stagnation_best = deployable_eval_mean
+            stagnation_count = 0
+        else:
+            stagnation_count += 1
+        budget_remaining = args.target_env_steps <= 0 or total_env_steps < args.target_env_steps
+        if (
+            budget_remaining
+            and args.stagnation_patience > 0
+            and stagnation_count >= args.stagnation_patience
+        ):
+            stagnation_boost = ray.get(manager.boost_diversity.remote(
+                args.immigrant_fraction, 0.35, 0.12))
+            ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))
+            stagnation_count = 0
         eval_reward_history.append(deployable_eval_mean)
         total_env_steps_history.append(total_env_steps)
         cumulative_rl_updates += int(sum(r.get('updates_applied', 0) for r in train_results))
@@ -622,6 +673,10 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
 
         log_data = {
             'generation': generation,
+            # Every EA generation broadcasts actors for distributed client
+            # evaluation and receives scalar fitness, so it is one protocol
+            # communication round even without a SAC aggregation event.
+            'communication_round': generation + 1,
             'total_env_steps': total_env_steps,
             # For FedEvoSAC, the deployable policy is the global elite/archive actor.
             # Local RL rollout scores remain in client_reward_mean/std.
@@ -667,6 +722,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                 float(np.mean([r.get('updates_applied', 0) for r in train_results]))
                 if train_results else 0.0
             ),
+            'stagnation_boost': stagnation_boost,
         }
         _append_local_metrics(metrics_path, log_data)
         _log(
@@ -700,7 +756,7 @@ def main():
         args.num_clients = _cap_num_workers(args.num_clients, args.mode)
     else:
         args.num_workers = _cap_num_workers(args.num_workers, args.mode)
-    ray.init(ignore_reinit_error=True, logging_level='warning')
+    ray.init(ignore_reinit_error=True, include_dashboard=False, logging_level='warning')
 
     _log("Starting FedEvoRL Training")
     _log(f"  Environment: {args.env}")
@@ -763,6 +819,7 @@ def main():
             args.elite_fraction,
             args.num_elitists,
             ga_config,
+            args.seed,
         )
         template = build_model_template(
             env_info['state_dim'], env_info['action_dim'], algorithm=args.algorithm,

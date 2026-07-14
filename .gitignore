@@ -134,6 +134,7 @@ logs_*/
 logs_compare/
 logs_smoke/
 plots/
+plots_new/
 wandb/
 *.pkl
 *.h5

@@ -1,5 +1,7 @@
 """EA Manager: ERL-Re² genetic algorithm + distributed evaluation."""
 
+import random
+
 import ray
 import numpy as np
 from typing import List, Dict, Any, Optional
@@ -14,7 +16,13 @@ class EAManager:
 
     def __init__(self, population_size: int = 50, elite_fraction: float = 0.2,
                  num_elitists: Optional[int] = None,
-                 ga_config: Optional[Dict[str, Any]] = None):
+                 ga_config: Optional[Dict[str, Any]] = None,
+                 seed: int = 0):
+        self.seed = int(seed)
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        self._rng = random.Random(self.seed)
+        self._np_rng = np.random.default_rng(self.seed)
         self.population_size = population_size
         if num_elitists is not None:
             self.num_elitists = max(1, num_elitists)
@@ -47,14 +55,14 @@ class EAManager:
 
         def make_individual(i: int) -> Individual:
             weights = {
-                key: np.random.normal(0, 0.1, array.shape).astype(array.dtype)
+                key: self._np_rng.normal(0, 0.1, array.shape).astype(array.dtype)
                 for key, array in model_template.items()
             }
             self._clip_weights(weights)
             return Individual(
                 id=i,
                 weights=weights,
-                seed=np.random.randint(0, 2**32),
+                seed=int(self._np_rng.integers(0, 2**32)),
                 hyperparams={'lr': 3e-4, 'tau': 0.005},
             )
 
@@ -119,7 +127,7 @@ class EAManager:
             prob_reset_and_super=self.ga_config.prob_reset_and_super,
             actor_prefix=self.ga_config.actor_prefix,
         )
-        elite_idx, sel_stats = erl_re2_epoch(self.population, cfg)
+        elite_idx, sel_stats = erl_re2_epoch(self.population, cfg, rng=self._rng)
         self._clip_population_weights()
         self._elite_index = elite_idx
         self._last_selection_stats = sel_stats
@@ -247,17 +255,17 @@ class EAManager:
         replaced = 0
         for ind in self.population[-n_imm:]:
             ind.weights = {
-                key: np.random.normal(0, 0.15, array.shape).astype(array.dtype)
+                key: self._np_rng.normal(0, 0.15, array.shape).astype(array.dtype)
                 for key, array in self._model_template.items()
             }
             self._clip_weights(ind.weights)
-            ind.seed = int(np.random.randint(0, 2**32))
+            ind.seed = int(self._np_rng.integers(0, 2**32))
             ind.fitness = 0.0
             replaced += 1
         for ind in self.population[self.num_elitists:-n_imm]:
-            b_mutate_inplace(ind.weights, cfg)
+            b_mutate_inplace(ind.weights, cfg, rng=self._rng)
             self._clip_weights(ind.weights)
-            ind.seed = int(np.random.randint(0, 2**32))
+            ind.seed = int(self._np_rng.integers(0, 2**32))
         return replaced
 
     def inject_rl_individual(self, rl_weights: Dict[str, np.ndarray],
@@ -296,11 +304,11 @@ class EAManager:
                     continue
                 mixed = (1.0 - blend) * current + blend * target
                 if scale > 0 and key.startswith('actor.'):
-                    mixed = mixed + np.random.normal(0, scale, mixed.shape).astype(mixed.dtype)
+                    mixed = mixed + self._np_rng.normal(0, scale, mixed.shape).astype(mixed.dtype)
                     if self.weight_clip > 0:
                         mixed = np.clip(mixed, -self.weight_clip, self.weight_clip)
                 ind.weights[key] = mixed.astype(current.dtype, copy=False)
-            ind.seed = int(np.random.randint(0, 2**32))
+            ind.seed = int(self._np_rng.integers(0, 2**32))
             ind.fitness = float(np.median(fitness))
             inserted += 1
             if inserted >= copies:

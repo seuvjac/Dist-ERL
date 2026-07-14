@@ -92,7 +92,11 @@ def _run_values(metrics_path):
             ]
             best_vals = [v for v in best_vals if math.isfinite(v)]
             rows.append({
-                'generation': _num(row.get('generation')),
+                'generation': (
+                    _num(row.get('communication_round'))
+                    if math.isfinite(_num(row.get('communication_round')))
+                    else _num(row.get('generation'))
+                ),
                 'steps': _num(row.get('total_env_steps')),
                 'wall_time_sec': _num(row.get('total_time')),
                 'current': current,
@@ -107,6 +111,11 @@ def _fmt(mean, std):
     return f"{mean:.2f} +/- {std:.2f}"
 
 
+def _sample_std(values):
+    values = np.asarray(values, dtype=float)
+    return float(values.std(ddof=1)) if values.size > 1 else 0.0
+
+
 def main():
     args = parse_args()
     roots = [Path(args.fed_log_dir), Path(args.paper_log_dir), Path(args.dqn_log_dir)]
@@ -114,7 +123,7 @@ def main():
     for root in roots:
         if not root.exists():
             continue
-        for metrics in root.glob('*/metrics.csv'):
+        for metrics in root.rglob('metrics.csv'):
             meta_path = metrics.parent / 'metadata.json'
             meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
             env = meta.get('env', 'unknown')
@@ -145,20 +154,23 @@ def main():
             steps = np.asarray([v['steps'] for v in vals], dtype=float)
             rounds = np.asarray([v['generation'] for v in vals], dtype=float)
             wall_times = np.asarray([v['wall_time_sec'] for v in vals], dtype=float)
+            current_std = _sample_std(currents)
+            best_std = _sample_std(bests)
+            wall_time_std = _sample_std(wall_times[np.isfinite(wall_times)])
             row = {
                 'env': env,
                 'method': method,
                 'n': len(vals),
                 'final_current_mean': float(currents.mean()),
-                'final_current_std': float(currents.std()),
-                'final_current': _fmt(currents.mean(), currents.std()),
+                'final_current_std': current_std,
+                'final_current': _fmt(currents.mean(), current_std),
                 'final_best_mean': float(bests.mean()),
-                'final_best_std': float(bests.std()),
-                'final_best': _fmt(bests.mean(), bests.std()),
+                'final_best_std': best_std,
+                'final_best': _fmt(bests.mean(), best_std),
                 'max_steps': int(np.nanmax(steps)),
                 'max_round': int(np.nanmax(rounds)),
                 'max_wall_time_sec': float(np.nanmax(wall_times)),
-                'wall_time_sec': _fmt(float(np.nanmean(wall_times)), float(np.nanstd(wall_times))),
+                'wall_time_sec': _fmt(float(np.nanmean(wall_times)), wall_time_std),
             }
             writer.writerow(row)
     print(out_path)

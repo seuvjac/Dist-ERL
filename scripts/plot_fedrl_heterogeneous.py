@@ -30,8 +30,11 @@ def parse_args():
                    help='Shift each run so its first logged x value is plotted at zero')
     p.add_argument('--metric', default='current', choices=['current', 'candidate', 'best'],
                    help='current uses deployable eval; candidate uses the current training policy; best uses optimistic archive metrics')
-    p.add_argument('--variance', default='seed', choices=['seed', 'eval', 'combined', 'none'],
-                   help='Uncertainty band source: across seeds, within-run evaluation std, both, or none')
+    p.add_argument(
+        '--variance', default='seed',
+        choices=['seed', 'sem', 'ci90', 'ci95', 'eval', 'combined', 'none'],
+        help='Uncertainty band: seed std, standard error, 90/95%% CI, eval std, combined std, or none',
+    )
     p.add_argument('--smooth-window', type=int, default=1,
                    help='Moving-average window over interpolated plotting points; 1 disables smoothing')
     p.add_argument('--style', default='reference', choices=['reference', 'standard'],
@@ -98,14 +101,16 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
         root = Path(log_dir)
         if not root.exists():
             continue
-        for metrics in sorted(root.glob('*/metrics.csv')):
+        for metrics in sorted(root.rglob('metrics.csv')):
             meta_path = metrics.parent / 'metadata.json'
             meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
             xs, ys, y_stds = [], [], []
             with metrics.open(newline='', encoding='utf-8') as f:
                 for row in csv.DictReader(f):
                     if x_axis == 'round':
-                        x = _num(row.get('generation'))
+                        x = _num(row.get('communication_round'))
+                        if not np.isfinite(x):
+                            x = _num(row.get('generation'))
                     else:
                         x = _num(row.get('total_env_steps'))
                     if metric == 'current':
@@ -131,10 +136,18 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
                         y_stds.append(std if np.isfinite(std) else 0.0)
             if len(xs) < 1:
                 continue
+            if x_axis == 'round':
+                collapsed = {}
+                for x, y, y_std in zip(xs, ys, y_stds):
+                    collapsed[float(x)] = (float(y), float(y_std))
+                xs = sorted(collapsed)
+                ys = [collapsed[x][0] for x in xs]
+                y_stds = [collapsed[x][1] for x in xs]
             if x_axis == 'progress':
-                denom = max(xs)
+                start = min(xs)
+                denom = max(xs) - start
                 if denom > 0:
-                    xs = [100.0 * x / denom for x in xs]
+                    xs = [100.0 * (x - start) / denom for x in xs]
             mode = meta.get('mode', metrics.parent.name)
             if str(mode).startswith('sb3_'):
                 continue
@@ -225,9 +238,13 @@ def main():
         'FedEvoFSAC-full': '#D55E00',
         'FedEvoSAC-full': '#D55E00',
         'FedEvoFSAC-uniform_aggregation': '#0072B2',
+        'FedEvoSAC-uniform_aggregation': '#0072B2',
         'FedEvoFSAC-no_local_rl': '#009E73',
+        'FedEvoSAC-no_local_rl': '#009E73',
         'FedEvoFSAC-no_ea_injection': '#E69F00',
+        'FedEvoSAC-no_ea_injection': '#E69F00',
         'FedEvoFSAC-no_heterogeneity': '#CC79A7',
+        'FedEvoSAC-no_heterogeneity': '#CC79A7',
         'FedEvoFSAC-raw_softmax': '#882255',
         'FedEvoSAC-raw_softmax': '#882255',
         'Paper-FSAC': '#56B4E9',
@@ -245,6 +262,14 @@ def main():
     line_styles = {
         'FedEvoFSAC-full': '-',
         'FedEvoSAC-full': '-',
+        'FedEvoFSAC-uniform_aggregation': '--',
+        'FedEvoSAC-uniform_aggregation': '--',
+        'FedEvoFSAC-no_local_rl': '-.',
+        'FedEvoSAC-no_local_rl': '-.',
+        'FedEvoFSAC-no_ea_injection': ':',
+        'FedEvoSAC-no_ea_injection': ':',
+        'FedEvoFSAC-no_heterogeneity': '-',
+        'FedEvoSAC-no_heterogeneity': '-',
         'FedEvoFSAC-raw_softmax': '-.',
         'FedEvoSAC-raw_softmax': '-.',
         'FedAvg-SAC': ':',
@@ -296,13 +321,34 @@ def main():
                     )
             mat = np.vstack(interpolated)
             std_mat = np.vstack(interpolated_stds)
-            y = np.nanmean(mat, axis=0)
-            seed_s = np.nanstd(mat, axis=0)
-            eval_s = np.nanmean(std_mat, axis=0)
+            finite_count = np.sum(np.isfinite(mat), axis=0)
+            y = np.divide(
+                np.nansum(mat, axis=0),
+                finite_count,
+                out=np.full(mat.shape[1], np.nan),
+                where=finite_count > 0,
+            )
+            centered = np.where(np.isfinite(mat), mat - y, 0.0)
+            seed_s = np.sqrt(np.divide(
+                np.sum(centered ** 2, axis=0),
+                np.maximum(1, finite_count - 1),
+                out=np.zeros(mat.shape[1], dtype=float),
+                where=finite_count > 1,
+            ))
+            eval_s = np.divide(
+                np.nansum(std_mat, axis=0),
+                np.maximum(1, np.sum(np.isfinite(std_mat), axis=0)),
+            )
             if args.variance == 'eval':
                 s = eval_s
             elif args.variance == 'combined':
                 s = np.sqrt(seed_s ** 2 + eval_s ** 2)
+            elif args.variance in ('sem', 'ci90', 'ci95'):
+                s = seed_s / np.sqrt(np.maximum(1, finite_count))
+                if args.variance == 'ci90':
+                    s = 1.645 * s
+                elif args.variance == 'ci95':
+                    s = 1.960 * s
             elif args.variance == 'none':
                 s = np.zeros_like(y)
             else:
@@ -330,14 +376,14 @@ def main():
                 zorder=3,
             )
         if args.plot_kind == 'ablation':
-            title = f'{env}: FedEvoFSAC ablations'
+            title = f'{env}: FedEvoSAC ablations'
         else:
-            title = f'{env}: FedEvoFSAC vs FedRL baselines'
+            title = f'{env}: FedEvoSAC vs FedRL baselines'
         ax.set_title(title)
         if args.x_axis == 'progress':
             xlabel = 'Training progress (%)'
         elif args.x_axis == 'round':
-            xlabel = 'Communication round / generation'
+            xlabel = 'Communication round'
         elif args.align_start:
             xlabel = 'Environment steps since first logged evaluation'
         else:

@@ -39,6 +39,43 @@ def test_ea_manager():
     ray.shutdown()
 
 
+def test_ea_manager_seed_reproduces_initial_population():
+    ray.init(ignore_reinit_error=True, num_cpus=2)
+    info = get_env_info('Pendulum-v1')
+    template = build_model_template(info['state_dim'], info['action_dim'], algorithm='DDPG')
+    manager_a = EAManager.remote(population_size=4, seed=17)
+    manager_b = EAManager.remote(population_size=4, seed=17)
+    ray.get([
+        manager_a.initialize_population.remote(template),
+        manager_b.initialize_population.remote(template),
+    ])
+    population_a, population_b = ray.get([
+        manager_a.get_population_for_evaluation.remote(),
+        manager_b.get_population_for_evaluation.remote(),
+    ])
+    actor_key = next(key for key in template if key.startswith('actor.'))
+    for individual_a, individual_b in zip(population_a, population_b):
+        assert individual_a['seed'] == individual_b['seed']
+        assert np.array_equal(
+            individual_a['weights'][actor_key], individual_b['weights'][actor_key])
+
+    fitness = [{'id': idx, 'fitness': float(idx)} for idx in range(4)]
+    ray.get([
+        manager_a.update_fitness.remote(fitness),
+        manager_b.update_fitness.remote(fitness),
+    ])
+    ray.get([manager_a.evolve_population.remote(), manager_b.evolve_population.remote()])
+    evolved_a, evolved_b = ray.get([
+        manager_a.get_population_for_evaluation.remote(),
+        manager_b.get_population_for_evaluation.remote(),
+    ])
+    for individual_a, individual_b in zip(evolved_a, evolved_b):
+        assert individual_a['seed'] == individual_b['seed']
+        assert np.array_equal(
+            individual_a['weights'][actor_key], individual_b['weights'][actor_key])
+    ray.shutdown()
+
+
 def test_manager_evaluate_population():
     ray.init(ignore_reinit_error=True, num_cpus=2)
     info = get_env_info('Pendulum-v1')

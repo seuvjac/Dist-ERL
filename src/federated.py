@@ -123,6 +123,8 @@ class FederatedClient:
         heterogeneity: float = 0.2,
         heterogeneity_mode: str = 'reward_action_noise',
         policy_exploration_noise: float = 0.1,
+        seed: int = 0,
+        actor_lr: Optional[float] = None,
     ):
         self.client_id = int(client_id)
         self.env_name = env_name
@@ -136,14 +138,21 @@ class FederatedClient:
         self.heterogeneity = max(0.0, float(heterogeneity))
         self.heterogeneity_mode = heterogeneity_mode
         self.policy_exploration_noise = policy_exploration_noise
+        self.seed = int(seed)
+        self.actor_lr = float(actor_lr) if actor_lr is not None else float(lr)
 
         env_info = get_env_info(env_name)
         self.state_dim = env_info['state_dim']
         self.action_dim = env_info['action_dim']
         self.is_discrete = hasattr(env_info.get('action_space'), 'n')
-        self.reward_scale = 1.0 + self.heterogeneity * ((self.client_id % 5) - 2) / 4.0
-        self.action_noise = self.heterogeneity * 0.05 * (1 + (self.client_id % 3))
+        # make_env() owns all client-specific reward/action perturbations.  Do
+        # not apply a second copy here, especially for env_params_only runs.
+        self.reward_scale = 1.0
+        self.action_noise = 0.0
         self.seed_offset = self.client_id * 10007
+        actor_seed = self.seed + self.seed_offset
+        np.random.seed(actor_seed)
+        torch.manual_seed(actor_seed)
 
         self.replay_buffer = HybridReplayBuffer(buffer_size)
         self.policy = self._initialize_policy()
@@ -152,7 +161,7 @@ class FederatedClient:
                 list(self.policy.critic1.parameters()) + list(self.policy.critic2.parameters()),
                 lr=lr,
             )
-            self.actor_optimizer = optim.Adam(self.policy.actor.parameters(), lr=lr)
+            self.actor_optimizer = optim.Adam(self.policy.actor.parameters(), lr=self.actor_lr)
             self.alpha_optimizer = optim.Adam([self.policy.log_alpha], lr=lr)
             self.optimizer = None
         else:
@@ -256,6 +265,10 @@ class FederatedClient:
         seed: Optional[int] = None,
         critic_warmup_updates: int = 0,
     ) -> Dict[str, Any]:
+        if seed is not None:
+            local_seed = int(seed + self.seed_offset)
+            np.random.seed(local_seed)
+            torch.manual_seed(local_seed)
         self._load_weights(weights)
         if self.algorithm == 'SAC':
             self.actor_optimizer.state.clear()
