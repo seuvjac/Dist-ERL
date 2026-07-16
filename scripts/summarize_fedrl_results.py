@@ -118,7 +118,17 @@ def _sample_std(values):
 
 def main():
     args = parse_args()
-    roots = [Path(args.fed_log_dir), Path(args.paper_log_dir), Path(args.dqn_log_dir)]
+    roots = []
+    seen_roots = set()
+    for root_name in (args.fed_log_dir, args.paper_log_dir, args.dqn_log_dir):
+        if not root_name:
+            continue
+        root = Path(root_name)
+        resolved = root.resolve()
+        if resolved in seen_roots:
+            continue
+        seen_roots.add(resolved)
+        roots.append(root)
     grouped = defaultdict(list)
     for root in roots:
         if not root.exists():
