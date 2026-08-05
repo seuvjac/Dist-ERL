@@ -62,11 +62,10 @@ def aggregate_weight_dicts(
         filtered_scores.append(score)
     if not filtered_weights:
         return {}
+    # Scores are normalized explicitly by the caller (raw, batch z-score,
+    # relative gain, or uniform). Re-normalizing here used to erase
+    # fed_score_scale and made the raw-softmax ablation behave like z-score.
     score_arr = np.asarray(filtered_scores, dtype=np.float64)
-    if score_arr.size > 1 and np.isfinite(score_arr).all():
-        score_arr = (score_arr - score_arr.mean()) / (score_arr.std() + 1e-8)
-        if mode == 'softmax':
-            temperature = max(1e-6, temperature / max(1.0, float(np.std(filtered_scores))))
     coeffs = _aggregation_weights(score_arr, mode=mode, temperature=temperature)
     keys = sorted(set.intersection(*(set(w.keys()) for w in filtered_weights)))
     aggregated: Dict[str, np.ndarray] = {}
@@ -186,16 +185,24 @@ class FederatedClient:
     def _is_genotype_key(self, name: str) -> bool:
         return name.startswith(_GENOTYPE_PREFIXES) and not name.startswith('target_')
 
-    def _export_weights(self) -> Dict[str, np.ndarray]:
+    def _export_weights(self, exclude_sac_log_std: bool = False) -> Dict[str, np.ndarray]:
         exported = {}
         for name, param in self.policy.state_dict().items():
             if self._is_genotype_key(name):
+                if exclude_sac_log_std and name.startswith('actor.log_std.'):
+                    continue
                 exported[name] = param.cpu().detach().numpy()
         return exported
 
-    def _load_weights(self, weights: Dict[str, np.ndarray]) -> None:
+    def _load_weights(
+        self,
+        weights: Dict[str, np.ndarray],
+        preserve_sac_log_std: bool = False,
+    ) -> None:
         state = self.policy.state_dict()
         for name, array in weights.items():
+            if preserve_sac_log_std and name.startswith('actor.log_std.'):
+                continue
             if name in state and state[name].shape == array.shape:
                 state[name] = torch.from_numpy(array.copy()).to(dtype=state[name].dtype)
         self.policy.load_state_dict(state)
@@ -214,7 +221,7 @@ class FederatedClient:
             return self.policy.get_action(observation)
         return self.policy.get_action(observation)
 
-    def evaluate_weights(
+    def _evaluate_actor_weights(
         self,
         weights: Dict[str, np.ndarray],
         seed: Optional[int] = None,
@@ -257,6 +264,14 @@ class FederatedClient:
             'total_steps': int(total_steps),
         }
 
+    def evaluate_weights(
+        self,
+        weights: Dict[str, np.ndarray],
+        seed: Optional[int] = None,
+        num_episodes: int = 1,
+    ) -> Dict[str, Any]:
+        return self._evaluate_actor_weights(weights, seed, num_episodes)
+
     def local_train(
         self,
         weights: Dict[str, np.ndarray],
@@ -264,12 +279,18 @@ class FederatedClient:
         updates: int,
         seed: Optional[int] = None,
         critic_warmup_updates: int = 0,
+        validation_episodes: int = 0,
+        rollback_margin: float = 0.0,
+        preserve_sac_log_std: bool = False,
     ) -> Dict[str, Any]:
         if seed is not None:
             local_seed = int(seed + self.seed_offset)
             np.random.seed(local_seed)
             torch.manual_seed(local_seed)
-        self._load_weights(weights)
+        self._load_weights(
+            weights,
+            preserve_sac_log_std=preserve_sac_log_std,
+        )
         if self.algorithm == 'SAC':
             self.actor_optimizer.state.clear()
         env = make_env(
@@ -346,11 +367,76 @@ class FederatedClient:
             self.training_steps += 1
 
         env.close()
+        candidate_weights = self._export_weights(
+            exclude_sac_log_std=preserve_sac_log_std)
+        uploaded_weights = candidate_weights
+        candidate_accepted = True
+        base_validation_score = float('nan')
+        candidate_validation_score = float('nan')
+        validation_steps = 0
+        if int(validation_episodes) > 0:
+            validation_seed = (
+                int(seed) + 800_003
+                if seed is not None
+                else self.seed + self.training_steps + 800_003
+            )
+            base_result = self._evaluate_actor_weights(
+                weights, validation_seed, int(validation_episodes))
+            candidate_for_eval = {
+                key: np.array(value, copy=True)
+                for key, value in weights.items()
+            }
+            candidate_for_eval.update(candidate_weights)
+            candidate_result = self._evaluate_actor_weights(
+                candidate_for_eval, validation_seed, int(validation_episodes))
+            validation_steps = int(
+                base_result['total_steps'] + candidate_result['total_steps'])
+            base_validation_score = float(base_result['fitness'])
+            candidate_validation_score = float(candidate_result['fitness'])
+            tolerance = max(0.0, float(rollback_margin)) * max(
+                1.0, abs(base_validation_score))
+            candidate_accepted = (
+                np.isfinite(candidate_validation_score)
+                and candidate_validation_score >= base_validation_score - tolerance
+            )
+            if not candidate_accepted:
+                uploaded_weights = {
+                    key: np.array(value, copy=True)
+                    for key, value in weights.items()
+                    if not (
+                        preserve_sac_log_std
+                        and key.startswith('actor.log_std.')
+                    )
+                }
+                self._load_weights(
+                    weights,
+                    preserve_sac_log_std=preserve_sac_log_std,
+                )
+
+        total_steps += validation_steps
         avg_reward = total_reward / max(1, num_episodes)
+        upload_score = (
+            candidate_validation_score
+            if candidate_accepted and np.isfinite(candidate_validation_score)
+            else base_validation_score
+        )
+        if not np.isfinite(upload_score):
+            upload_score = avg_reward
         return {
             'client_id': self.client_id,
-            'weights': self._export_weights(),
+            'weights': uploaded_weights,
             'avg_reward': float(avg_reward),
+            'upload_score': float(upload_score),
+            'candidate_accepted': int(candidate_accepted),
+            'base_validation_score': base_validation_score,
+            'candidate_validation_score': candidate_validation_score,
+            'candidate_validation_gain': (
+                candidate_validation_score - base_validation_score
+                if np.isfinite(base_validation_score)
+                and np.isfinite(candidate_validation_score)
+                else 0.0
+            ),
+            'validation_steps': int(validation_steps),
             'total_steps': int(total_steps),
             'training_steps': int(self.training_steps),
             'updates_applied': int(len(losses)),

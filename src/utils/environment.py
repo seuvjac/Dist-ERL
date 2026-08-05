@@ -13,6 +13,7 @@ MUJOCO_V2_RUNTIME_MAP: Dict[str, str] = {
     'Swimmer-v2': 'Swimmer-v5',
     'Hopper-v2': 'Hopper-v5',
     'Ant-v2': 'Ant-v5',
+    'Pusher-v2': 'Pusher-v5',
     'Walker2d-v2': 'Walker2d-v5',
     'Humanoid-v2': 'Humanoid-v5',
 }
@@ -182,8 +183,10 @@ def _apply_classic_control_heterogeneity(
             base.max_speed = 0.07 * max(0.45, 1.0 - 0.25 * scale_boost * strength)
         return
     if env_name in (
+        'Ant-v5',
         'HalfCheetah-v5',
         'Hopper-v5',
+        'Pusher-v5',
         'Swimmer-v5',
         'Reacher-v5',
         'Walker2d-v5',
@@ -191,6 +194,17 @@ def _apply_classic_control_heterogeneity(
         scale_boost = 1.8 if mode == 'mixed' else 1.0
         if hasattr(base, 'model'):
             model = base.model
+            if env_name == 'Swimmer-v5':
+                if hasattr(model, 'body_mass'):
+                    model.body_mass[:] = model.body_mass[:] * max(
+                        0.70, 1.0 + 0.12 * scale_boost * strength)
+                if hasattr(model, 'dof_damping'):
+                    model.dof_damping[:] = model.dof_damping[:] * max(
+                        0.55, 1.0 - 0.30 * scale_boost * strength)
+                if hasattr(model, 'geom_friction') and model.geom_friction.ndim == 2:
+                    model.geom_friction[:, 0] = model.geom_friction[:, 0] * max(
+                        0.60, 1.0 + 0.25 * scale_boost * strength)
+                return
             if hasattr(model, 'opt') and hasattr(model.opt, 'gravity'):
                 model.opt.gravity[2] = -9.81 * max(0.55, 1.0 + 0.20 * scale_boost * strength)
             if hasattr(model, 'body_mass'):

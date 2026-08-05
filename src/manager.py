@@ -39,6 +39,10 @@ class EAManager:
             super_mut_strength=float(ga_cfg.get('super_mut_strength', 10.0)),
             prob_reset_and_super=float(ga_cfg.get('prob_reset_and_super', 0.05)),
             actor_prefix=str(ga_cfg.get('actor_prefix', 'actor.')),
+            actor_exclude_substrings=tuple(ga_cfg.get('actor_exclude_substrings', ())),
+            mutation_scale_mode=str(ga_cfg.get('mutation_scale_mode', 'element')),
+            mutation_scale_floor=float(ga_cfg.get('mutation_scale_floor', 1e-3)),
+            mutate_bias=bool(ga_cfg.get('mutate_bias', False)),
         )
         self.weight_clip = float(ga_cfg.get('weight_clip', 5.0))
         self.population: List[Individual] = []
@@ -50,19 +54,72 @@ class EAManager:
         self._elite_archive: List[Individual] = []
         self._archive_size: int = 0
 
-    def initialize_population(self, model_template: Dict[str, np.ndarray]) -> None:
+    def initialize_population(
+        self,
+        model_template: Dict[str, np.ndarray],
+        init_mode: str = 'gaussian',
+        init_seed: Optional[int] = None,
+        anchor_noise_scale: float = 0.05,
+    ) -> None:
         self._model_template = {k: v for k, v in model_template.items()}
+        init_mode = str(init_mode).lower()
+        if init_mode not in ('gaussian', 'anchor_perturb', 'anchor_antithetic'):
+            raise ValueError(f'Unsupported EA init_mode={init_mode}')
+        init_rng = (
+            np.random.default_rng(int(init_seed))
+            if init_seed is not None and int(init_seed) >= 0
+            else self._np_rng
+        )
+        anchor_noise_scale = max(0.0, float(anchor_noise_scale))
+
+        antithetic_noise: Dict[int, Dict[str, np.ndarray]] = {}
+
+        def is_evolvable(key: str) -> bool:
+            return (
+                key.startswith(self.ga_config.actor_prefix)
+                and not any(
+                    token in key
+                    for token in self.ga_config.actor_exclude_substrings
+                )
+            )
+
+        def perturbation(key: str, base: np.ndarray, i: int) -> np.ndarray:
+            layer_rms = float(np.sqrt(np.mean(np.square(base, dtype=np.float64))))
+            noise_std = anchor_noise_scale * max(
+                layer_rms, self.ga_config.mutation_scale_floor)
+            if noise_std <= 0:
+                return np.zeros_like(base)
+            if init_mode != 'anchor_antithetic':
+                return init_rng.normal(0.0, noise_std, base.shape).astype(base.dtype)
+            pair_id = (i - 1) // 2
+            pair_noise = antithetic_noise.setdefault(pair_id, {})
+            if key not in pair_noise:
+                pair_noise[key] = init_rng.normal(
+                    0.0, noise_std, base.shape).astype(base.dtype)
+            sign = 1.0 if i % 2 == 1 else -1.0
+            return sign * pair_noise[key]
 
         def make_individual(i: int) -> Individual:
-            weights = {
-                key: self._np_rng.normal(0, 0.1, array.shape).astype(array.dtype)
-                for key, array in model_template.items()
-            }
+            if init_mode == 'gaussian':
+                weights = {
+                    key: init_rng.normal(0, 0.1, array.shape).astype(array.dtype)
+                    for key, array in model_template.items()
+                }
+            else:
+                weights = {}
+                for key, array in model_template.items():
+                    base = np.array(array, copy=True)
+                    # Keep one exact SAC actor and perturb only parameters that
+                    # participate in deterministic EA fitness. In continuous
+                    # SAC, log_std can therefore remain client-local.
+                    if i > 0 and is_evolvable(key):
+                        base = base + perturbation(key, base, i)
+                    weights[key] = base.astype(array.dtype, copy=False)
             self._clip_weights(weights)
             return Individual(
                 id=i,
                 weights=weights,
-                seed=int(self._np_rng.integers(0, 2**32)),
+                seed=int(init_rng.integers(0, 2**32)),
                 hyperparams={'lr': 3e-4, 'tau': 0.005},
             )
 
@@ -126,6 +183,10 @@ class EAManager:
             super_mut_strength=self.ga_config.super_mut_strength,
             prob_reset_and_super=self.ga_config.prob_reset_and_super,
             actor_prefix=self.ga_config.actor_prefix,
+            actor_exclude_substrings=self.ga_config.actor_exclude_substrings,
+            mutation_scale_mode=self.ga_config.mutation_scale_mode,
+            mutation_scale_floor=self.ga_config.mutation_scale_floor,
+            mutate_bias=self.ga_config.mutate_bias,
         )
         elite_idx, sel_stats = erl_re2_epoch(self.population, cfg, rng=self._rng)
         self._clip_population_weights()
@@ -249,15 +310,22 @@ class EAManager:
             mutation_alpha=1.0,
             mutation_beta_frac=mutation_rate,
             mut_strength=mutation_strength,
-            prob_reset_and_super=0.1,
+            prob_reset_and_super=min(0.02, self.ga_config.prob_reset_and_super),
             actor_prefix=self.ga_config.actor_prefix,
+            actor_exclude_substrings=self.ga_config.actor_exclude_substrings,
+            mutation_scale_mode=self.ga_config.mutation_scale_mode,
+            mutation_scale_floor=self.ga_config.mutation_scale_floor,
+            mutate_bias=self.ga_config.mutate_bias,
         )
         replaced = 0
-        for ind in self.population[-n_imm:]:
+        sources = self._elite_archive or self.population[:max(1, self.num_elitists)]
+        for offset, ind in enumerate(self.population[-n_imm:]):
+            source = sources[offset % len(sources)]
             ind.weights = {
-                key: self._np_rng.normal(0, 0.15, array.shape).astype(array.dtype)
-                for key, array in self._model_template.items()
+                key: np.array(array, copy=True)
+                for key, array in source.weights.items()
             }
+            b_mutate_inplace(ind.weights, cfg, rng=self._rng)
             self._clip_weights(ind.weights)
             ind.seed = int(self._np_rng.integers(0, 2**32))
             ind.fitness = 0.0
@@ -298,12 +366,21 @@ class EAManager:
             for key, arr in rl_weights.items():
                 if key not in ind.weights:
                     continue
+                is_evolvable = (
+                    key.startswith(self.ga_config.actor_prefix)
+                    and not any(
+                        token in key
+                        for token in self.ga_config.actor_exclude_substrings
+                    )
+                )
+                if not is_evolvable:
+                    continue
                 target = np.array(arr, copy=True)
                 current = ind.weights[key]
                 if current.shape != target.shape:
                     continue
                 mixed = (1.0 - blend) * current + blend * target
-                if scale > 0 and key.startswith('actor.'):
+                if scale > 0:
                     mixed = mixed + self._np_rng.normal(0, scale, mixed.shape).astype(mixed.dtype)
                     if self.weight_clip > 0:
                         mixed = np.clip(mixed, -self.weight_clip, self.weight_clip)
@@ -343,6 +420,10 @@ class EAManager:
                 ind.weights[k].ravel()
                 for k in sorted(ind.weights.keys())
                 if k.startswith('actor.')
+                and not any(
+                    token in k
+                    for token in self.ga_config.actor_exclude_substrings
+                )
             ]
             if not parts:
                 continue

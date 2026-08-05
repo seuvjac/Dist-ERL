@@ -1,6 +1,6 @@
 """Shared policy networks for Worker and Learner."""
 
-from typing import Dict, Literal
+from typing import Dict, Literal, Optional
 
 import numpy as np
 import torch
@@ -88,40 +88,50 @@ def build_model_template(
     hidden_dim: int = 256,
     algorithm: str = 'DDPG',
     discrete: bool = False,
+    seed: Optional[int] = None,
 ) -> Dict[str, np.ndarray]:
     """Weight template aligned with RL genotype keys used in the EA population."""
+    # The template can be used as an EA anchor.  Preserve the caller's torch
+    # RNG state so creating that anchor does not perturb client SAC seeding.
+    rng_state = None
+    if seed is not None:
+        rng_state = torch.random.get_rng_state()
+        torch.manual_seed(int(seed))
+
     algo = algorithm.upper()
     template: Dict[str, np.ndarray] = {}
+    try:
+        if algo == 'FSAC':
+            actor = build_discrete_sac_actor(state_dim, action_dim, hidden_dim)
+            for name, param in actor.state_dict().items():
+                template[f'actor.{name}'] = param.cpu().numpy().astype(np.float32)
+        elif algo == 'SAC':
+            actor = build_continuous_sac_actor(state_dim, action_dim, hidden_dim)
+            for name, param in actor.state_dict().items():
+                template[f'actor.{name}'] = param.cpu().numpy().astype(np.float32)
+        elif algo == 'PPO':
+            actor = build_ppo_actor(state_dim, action_dim, hidden_dim, discrete=discrete)
+            for name, param in actor.state_dict().items():
+                template[f'actor.{name}'] = param.cpu().numpy().astype(np.float32)
+            template.update(_value_template(state_dim, hidden_dim, 'critic'))
+        else:
+            actor = build_deterministic_actor(state_dim, action_dim, hidden_dim)
+            for name, param in actor.state_dict().items():
+                template[f'actor.{name}'] = param.cpu().numpy().astype(np.float32)
 
-    if algo == 'FSAC':
-        actor = build_discrete_sac_actor(state_dim, action_dim, hidden_dim)
-        for name, param in actor.state_dict().items():
-            template[f'actor.{name}'] = param.cpu().numpy().astype(np.float32)
-    elif algo == 'SAC':
-        actor = build_continuous_sac_actor(state_dim, action_dim, hidden_dim)
-        for name, param in actor.state_dict().items():
-            template[f'actor.{name}'] = param.cpu().numpy().astype(np.float32)
-    elif algo == 'PPO':
-        actor = build_ppo_actor(state_dim, action_dim, hidden_dim, discrete=discrete)
-        for name, param in actor.state_dict().items():
-            template[f'actor.{name}'] = param.cpu().numpy().astype(np.float32)
-        template.update(_value_template(state_dim, hidden_dim, 'critic'))
-    else:
-        actor = build_deterministic_actor(state_dim, action_dim, hidden_dim)
-        for name, param in actor.state_dict().items():
-            template[f'actor.{name}'] = param.cpu().numpy().astype(np.float32)
-
-    if algo == 'TD3':
-        template.update(_critic_template(state_dim, action_dim, hidden_dim, 'critic1'))
-        template.update(_critic_template(state_dim, action_dim, hidden_dim, 'critic2'))
-    elif algo == 'DDPG':
-        template.update(_critic_template(state_dim, action_dim, hidden_dim, 'critic'))
-    elif algo in ('PPO', 'FSAC', 'SAC'):
-        pass
-    else:
-        raise ValueError(f'build_model_template does not support algorithm={algorithm}')
-
-    return template
+        if algo == 'TD3':
+            template.update(_critic_template(state_dim, action_dim, hidden_dim, 'critic1'))
+            template.update(_critic_template(state_dim, action_dim, hidden_dim, 'critic2'))
+        elif algo == 'DDPG':
+            template.update(_critic_template(state_dim, action_dim, hidden_dim, 'critic'))
+        elif algo in ('PPO', 'FSAC', 'SAC'):
+            pass
+        else:
+            raise ValueError(f'build_model_template does not support algorithm={algorithm}')
+        return template
+    finally:
+        if rng_state is not None:
+            torch.random.set_rng_state(rng_state)
 
 
 def load_network_from_weights(

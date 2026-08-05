@@ -42,6 +42,8 @@ from src.worker import RolloutWorker
 
 FED_EVOFSAC_ENVS = ('CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3')
 FED_EVOSAC_ENVS = (
+    'Ant-v5',
+    'Pusher-v5',
     'Swimmer-v5',
     'Reacher-v5',
     'Walker2d-v5',
@@ -65,6 +67,8 @@ METRIC_FIELDS = [
     'deployable_eval_mean', 'deployable_eval_std',
     'aggregation_temperature', 'deployment_rollback', 'deployment_rollback_count',
     'candidate_eval_mean', 'candidate_eval_std', 'local_updates_per_worker',
+    'local_candidate_accept_rate', 'local_candidate_gain_mean',
+    'stagnation_boost_count',
 ]
 
 
@@ -81,8 +85,24 @@ def parse_args():
     parser.add_argument('--ea-mutation-prob', type=float, default=0.9, help='P(mutate) per non-elite')
     parser.add_argument('--ea-mutation-beta-frac', type=float, default=0.7,
                         help='Fraction of columns mutated per action row (ERL-Re² beta)')
+    parser.add_argument('--ea-mutation-scale-mode', type=str, default='element',
+                        choices=['element', 'layer_rms'],
+                        help='Scale mutation by each value or by the source layer RMS')
+    parser.add_argument('--ea-mutation-scale-floor', type=float, default=1e-3,
+                        help='Minimum layer scale used by layer-RMS mutation')
+    parser.add_argument('--ea-mutate-bias', action='store_true',
+                        help='Mutate actor biases together with selected weight rows')
+    parser.add_argument('--ea-freeze-sac-log-std', action='store_true',
+                        help='Exclude SAC log_std from EA/crossover and federated sharing')
     parser.add_argument('--ea-prob-reset-and-super', type=float, default=0.05,
                         help='Prob of drastic / reset mutation (ERL-Re² prob_reset_and_sup)')
+    parser.add_argument('--ea-init-mode', type=str, default='gaussian',
+                        choices=['gaussian', 'anchor_perturb', 'anchor_antithetic'],
+                        help='EA population initialization: independent Gaussian or a SAC anchor plus perturbations')
+    parser.add_argument('--ea-init-seed', type=int, default=-1,
+                        help='Optional fixed seed for the EA initial population; -1 uses --seed')
+    parser.add_argument('--ea-init-noise-scale', type=float, default=0.05,
+                        help='Relative layer-scale perturbation used by --ea-init-mode anchor_perturb')
     parser.add_argument('--num-workers', type=int, default=4, help='Number of rollout workers')
     parser.add_argument('--num-clients', type=int, default=4, help='Number of federated RL clients')
     parser.add_argument('--client-fraction', type=float, default=1.0,
@@ -95,6 +115,10 @@ def parse_args():
                         help='Critic-only updates after loading the server actor')
     parser.add_argument('--client-actor-lr', type=float, default=0.0,
                         help='Optional SAC client actor learning rate; <=0 uses --lr')
+    parser.add_argument('--client-validation-episodes', type=int, default=0,
+                        help='Held-out episodes used to reject a degrading local actor upload')
+    parser.add_argument('--client-rollback-margin', type=float, default=0.0,
+                        help='Relative validation degradation tolerated before local rollback')
     parser.add_argument('--client-heterogeneity', type=float, default=0.2,
                         help='Synthetic client MDP heterogeneity strength')
     parser.add_argument('--client-heterogeneity-mode', type=str, default='env_params',
@@ -115,6 +139,8 @@ def parse_args():
                         help='Run federated local train/aggregation every K generations')
     parser.add_argument('--fed-aggregation-temperature', type=float, default=75.0,
                         help='Softmax temperature for fitness-weighted client aggregation')
+    parser.add_argument('--fed-raw-softmax-temperature', type=float, default=75.0,
+                        help='Temperature used only by the raw-softmax ablation')
     parser.add_argument('--fed-score-normalization', type=str, default='relative_gain',
                         choices=['raw', 'batch_zscore', 'relative_gain', 'uniform'],
                         help='Normalize client rewards before reward-aware aggregation')
@@ -178,6 +204,10 @@ def parse_args():
                         help='Generations without RL eval improvement before diversity boost')
     parser.add_argument('--stagnation-min-delta', type=float, default=5.0,
                         help='Minimum eval_reward improvement to reset stagnation counter')
+    parser.add_argument('--stagnation-max-boosts', type=int, default=-1,
+                        help='Maximum diversity boosts; negative keeps the legacy unlimited behavior')
+    parser.add_argument('--stagnation-boost-cooldown', type=int, default=0,
+                        help='Minimum generations between diversity boosts')
     parser.add_argument('--immigrant-fraction', type=float, default=0.15,
                         help='Fraction of population replaced on stagnation boost')
     parser.add_argument('--inject-noise', type=float, default=0.05,
@@ -241,6 +271,13 @@ def _setup_local_logger(args):
         'max_generations': args.max_generations,
         'target_env_steps': args.target_env_steps,
         'max_episode_steps': args.max_episode_steps,
+        'ea_init_mode': args.ea_init_mode,
+        'ea_init_seed': args.ea_init_seed,
+        'ea_init_noise_scale': args.ea_init_noise_scale,
+        'ea_mutation_scale_mode': args.ea_mutation_scale_mode,
+        'ea_mutation_scale_floor': args.ea_mutation_scale_floor,
+        'ea_mutate_bias': args.ea_mutate_bias,
+        'ea_freeze_sac_log_std': args.ea_freeze_sac_log_std,
         'eval_episodes': args.eval_episodes,
         'batch_size': args.batch_size,
         'sync_interval': args.sync_interval,
@@ -262,11 +299,14 @@ def _setup_local_logger(args):
         'client_updates': args.client_updates,
         'client_critic_warmup_updates': args.client_critic_warmup_updates,
         'client_actor_lr': args.client_actor_lr,
+        'client_validation_episodes': args.client_validation_episodes,
+        'client_rollback_margin': args.client_rollback_margin,
         'client_heterogeneity': args.client_heterogeneity,
         'client_heterogeneity_mode': args.client_heterogeneity_mode,
         'fed_aggregation': args.fed_aggregation,
         'fed_aggregation_interval': args.fed_aggregation_interval,
         'fed_aggregation_temperature': args.fed_aggregation_temperature,
+        'fed_raw_softmax_temperature': args.fed_raw_softmax_temperature,
         'fed_score_normalization': args.fed_score_normalization,
         'fed_score_warmup_rounds': args.fed_score_warmup_rounds,
         'fed_score_warmup_normalization': args.fed_score_warmup_normalization,
@@ -286,6 +326,8 @@ def _setup_local_logger(args):
         'fed_score_scale': args.fed_score_scale,
         'stagnation_patience': args.stagnation_patience,
         'stagnation_min_delta': args.stagnation_min_delta,
+        'stagnation_max_boosts': args.stagnation_max_boosts,
+        'stagnation_boost_cooldown': args.stagnation_boost_cooldown,
         'immigrant_fraction': args.immigrant_fraction,
     }
     with open(os.path.join(run_dir, 'metadata.json'), 'w', encoding='utf-8') as f:
@@ -351,6 +393,9 @@ def _apply_fed_ablation_args(args) -> None:
         args.fed_aggregation = 'uniform'
     elif args.fed_ablation == FED_ABLATION_NO_LOCAL_RL:
         args.client_updates = 0
+        args.client_rollouts = 0
+        args.client_validation_episodes = 0
+        args.migration_copies = 0
     elif args.fed_ablation == FED_ABLATION_NO_EA_INJECTION:
         args.migration_copies = 0
     elif args.fed_ablation == FED_ABLATION_NO_HETEROGENEITY:
@@ -359,6 +404,7 @@ def _apply_fed_ablation_args(args) -> None:
     elif args.fed_ablation == FED_ABLATION_RAW_SOFTMAX:
         args.fed_aggregation = 'softmax'
         args.fed_score_normalization = 'raw'
+        args.fed_aggregation_temperature = args.fed_raw_softmax_temperature
         args.fed_score_warmup_rounds = 0
         args.fed_injection_warmup_rounds = 0
 
@@ -424,6 +470,12 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         'mutation_beta_frac': args.ea_mutation_beta_frac,
         'prob_reset_and_super': args.ea_prob_reset_and_super,
         'actor_prefix': 'actor.',
+        'actor_exclude_substrings': (
+            ('actor.log_std.',) if args.ea_freeze_sac_log_std else ()
+        ),
+        'mutation_scale_mode': args.ea_mutation_scale_mode,
+        'mutation_scale_floor': args.ea_mutation_scale_floor,
+        'mutate_bias': args.ea_mutate_bias,
         'weight_clip': args.ea_weight_clip,
     }
     manager = EAManager.remote(
@@ -433,10 +485,16 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         ga_config,
         args.seed,
     )
+    template_seed = args.ea_init_seed if args.ea_init_seed >= 0 else args.seed
     template = build_model_template(
         env_info['state_dim'], env_info['action_dim'], algorithm=args.algorithm,
-        discrete=hasattr(env_info.get('action_space'), 'n'))
-    ray.get(manager.initialize_population.remote(template))
+        discrete=hasattr(env_info.get('action_space'), 'n'), seed=template_seed)
+    ray.get(manager.initialize_population.remote(
+        template,
+        args.ea_init_mode,
+        args.ea_init_seed if args.ea_init_seed >= 0 else None,
+        args.ea_init_noise_scale,
+    ))
 
     clients = [
         FederatedClient.remote(
@@ -473,6 +531,8 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
     fed_aggregation_count = 0
     stagnation_best = float('-inf')
     stagnation_count = 0
+    stagnation_boost_count = 0
+    last_stagnation_boost_generation = -10**9
 
     generation = 0
     while (
@@ -527,9 +587,14 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))
 
         best = ray.get(manager.get_best_individual.remote())
-        fed_round_applied = int(generation % max(1, args.fed_aggregation_interval) == 0)
+        local_refinement_enabled = args.client_rollouts > 0 and args.client_updates > 0
+        fed_round_applied = int(
+            local_refinement_enabled
+            and generation % max(1, args.fed_aggregation_interval) == 0
+        )
         train_results = []
         aggregated = {}
+        aggregated_shared = {}
         inserted = 0
         client_indices = []
         if fed_round_applied:
@@ -540,11 +605,14 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                     best.weights, args.client_rollouts, args.client_updates,
                     args.seed + generation * 1000,
                     args.client_critic_warmup_updates,
+                    args.client_validation_episodes,
+                    args.client_rollback_margin,
+                    args.ea_freeze_sac_log_std,
                 )
                 for idx in client_indices
             ]
             train_results = ray.get(train_refs)
-        client_rewards = [r['avg_reward'] for r in train_results]
+        client_rewards = [r.get('upload_score', r['avg_reward']) for r in train_results]
         client_weights = [r['weights'] for r in train_results]
         aggregation_round_index = fed_aggregation_count if fed_round_applied else -1
         aggregation_score_mode = args.fed_score_normalization
@@ -571,7 +639,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                 if args.fed_aggregation != 'uniform' and len(aggregation_scores) > 1
                 else None
             )
-            aggregated = aggregate_weight_dicts(
+            aggregated_shared = aggregate_weight_dicts(
                 client_weights,
                 aggregation_scores,
                 mode=args.fed_aggregation,
@@ -580,6 +648,15 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                 base_weights=best.weights,
                 delta_clip_norm=args.fed_delta_clip_norm,
             )
+            if aggregated_shared:
+                # Client-local SAC exploration parameters are absent from the
+                # upload. Reattach the server copy for deterministic
+                # evaluation and archive storage without federating log_std.
+                aggregated = {
+                    key: np.array(value, copy=True)
+                    for key, value in best.weights.items()
+                }
+                aggregated.update(aggregated_shared)
         current_best = float(best.fitness)
         aggregated_eval_mean = float('-inf')
         aggregated_eval_std = 0.0
@@ -626,7 +703,10 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         stats = ray.get(manager.get_stats.remote())
         upload_b, full_b = _estimate_comm_bytes(
             args.population_size, env_info['state_dim'], env_info['action_dim'], args.max_episode_steps)
-        fed_upload = selected_count * sum(arr.nbytes for arr in aggregated.values()) if aggregated else 0
+        fed_upload = (
+            selected_count * sum(arr.nbytes for arr in aggregated_shared.values())
+            if aggregated_shared else 0
+        )
 
         if client_rewards:
             client_reward_mean = float(np.mean(client_rewards))
@@ -652,15 +732,27 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         else:
             stagnation_count += 1
         budget_remaining = args.target_env_steps <= 0 or total_env_steps < args.target_env_steps
+        boost_limit_ok = (
+            args.stagnation_max_boosts < 0
+            or stagnation_boost_count < args.stagnation_max_boosts
+        )
+        boost_cooldown_ok = (
+            generation - last_stagnation_boost_generation
+            >= max(0, args.stagnation_boost_cooldown)
+        )
         if (
             budget_remaining
             and args.stagnation_patience > 0
             and stagnation_count >= args.stagnation_patience
+            and boost_limit_ok
+            and boost_cooldown_ok
         ):
             stagnation_boost = ray.get(manager.boost_diversity.remote(
                 args.immigrant_fraction, 0.35, 0.12))
             ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))
             stagnation_count = 0
+            stagnation_boost_count += 1
+            last_stagnation_boost_generation = generation
         eval_reward_history.append(deployable_eval_mean)
         total_env_steps_history.append(total_env_steps)
         cumulative_rl_updates += int(sum(r.get('updates_applied', 0) for r in train_results))
@@ -722,7 +814,16 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                 float(np.mean([r.get('updates_applied', 0) for r in train_results]))
                 if train_results else 0.0
             ),
+            'local_candidate_accept_rate': (
+                float(np.mean([r.get('candidate_accepted', 1) for r in train_results]))
+                if train_results else 0.0
+            ),
+            'local_candidate_gain_mean': (
+                float(np.mean([r.get('candidate_validation_gain', 0.0) for r in train_results]))
+                if train_results else 0.0
+            ),
             'stagnation_boost': stagnation_boost,
+            'stagnation_boost_count': stagnation_boost_count,
         }
         _append_local_metrics(metrics_path, log_data)
         _log(
@@ -730,6 +831,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             f"fed_rollout={client_reward_mean:.2f} +/- {client_reward_std:.2f}, "
             f"ea_best={stats['max_fitness']:.2f}, diversity={stats.get('weight_diversity', 0.0):.3f}, "
             f"clients={active_client_count}/{args.num_clients}, agg={display_aggregation}, "
+            f"accept={log_data['local_candidate_accept_rate']:.2f}, "
             f"inject_warmup={int(injection_warmup_active)}"
         )
         if args.wandb:
@@ -812,6 +914,12 @@ def main():
             'mutation_beta_frac': args.ea_mutation_beta_frac,
             'prob_reset_and_super': args.ea_prob_reset_and_super,
             'actor_prefix': 'actor.',
+            'actor_exclude_substrings': (
+                ('actor.log_std.',) if args.ea_freeze_sac_log_std else ()
+            ),
+            'mutation_scale_mode': args.ea_mutation_scale_mode,
+            'mutation_scale_floor': args.ea_mutation_scale_floor,
+            'mutate_bias': args.ea_mutate_bias,
             'weight_clip': args.ea_weight_clip,
         }
         manager = EAManager.remote(

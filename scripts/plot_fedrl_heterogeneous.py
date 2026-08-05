@@ -8,6 +8,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import FuncFormatter
 
 
 def parse_args():
@@ -17,6 +18,8 @@ def parse_args():
     p.add_argument('--dqn-log-dir', default='logs/logs_dqn_fedrl')
     p.add_argument('--out-dir', default='plots/fedrl_heterogeneous')
     p.add_argument('--envs', nargs='*', default=None)
+    p.add_argument('--repeat-ids', nargs='*', default=None,
+                   help='Optional repeat_id values to include; useful for a documented experiment snapshot')
     p.add_argument('--plot-kind', default='comparison',
                    choices=['comparison', 'ablation', 'all'],
                    help='comparison excludes FedEvoFSAC ablations and EvoSAC-noFed; ablation plots only FedEvoFSAC variants')
@@ -37,8 +40,8 @@ def parse_args():
     )
     p.add_argument('--smooth-window', type=int, default=1,
                    help='Moving-average window over interpolated plotting points; 1 disables smoothing')
-    p.add_argument('--style', default='reference', choices=['reference', 'standard'],
-                   help='reference uses a white grid, faint raw traces, and thick smoothed lines')
+    p.add_argument('--style', default='reference', choices=['reference', 'paper', 'standard'],
+                   help='reference is diagnostic; paper uses restrained publication-facing emphasis')
     p.add_argument('--raw-traces', action=argparse.BooleanOptionalAction, default=True,
                    help='Draw faint unsmoothed traces behind the smoothed mean curve')
     return p.parse_args()
@@ -54,29 +57,51 @@ def _num(v):
 
 
 def _smooth_nan(values, window):
+    """Smooth finite spans without inventing values outside their support.
+
+    The old convolution-based implementation leaked later values into leading
+    NaNs and changed the first/last observed points.  That made a method whose
+    first evaluation happened later appear to start at x=0 with an inflated
+    return.  A shrinking, symmetric window keeps both endpoints exact and
+    leaves every originally missing point missing.
+    """
     window = int(window)
     arr = np.asarray(values, dtype=float)
     if window <= 1 or arr.size < 3:
-        return arr
+        return arr.copy()
     if window % 2 == 0:
         window += 1
-    window = min(window, arr.size if arr.size % 2 == 1 else arr.size - 1)
-    if window <= 1:
-        return arr
-    kernel = np.ones(window, dtype=float)
     finite = np.isfinite(arr)
-    filled = np.where(finite, arr, 0.0)
-    num = np.convolve(filled, kernel, mode='same')
-    den = np.convolve(finite.astype(float), kernel, mode='same')
-    out = np.divide(num, den, out=np.full_like(arr, np.nan), where=den > 0)
-    out[~finite & (den <= 0)] = np.nan
+    out = arr.copy()
+    half_window = window // 2
+    starts = np.flatnonzero(finite & np.r_[True, ~finite[:-1]])
+    ends = np.flatnonzero(finite & np.r_[~finite[1:], True])
+    for start, end in zip(starts, ends):
+        span = arr[start:end + 1]
+        for offset in range(span.size):
+            radius = min(half_window, offset, span.size - offset - 1)
+            if radius > 0:
+                out[start + offset] = np.mean(
+                    span[offset - radius:offset + radius + 1])
     return out
 
 
+def _align_runs_to_first_evaluation(runs):
+    """Return copies whose first recorded x value is zero."""
+    aligned = []
+    for run in runs:
+        if len(run['x']) < 1:
+            continue
+        shifted = dict(run)
+        shifted['x'] = run['x'] - run['x'][0]
+        aligned.append(shifted)
+    return aligned
+
+
 def _apply_plot_style(style):
-    if style != 'reference':
+    if style not in ('reference', 'paper'):
         return
-    plt.rcParams.update({
+    params = {
         'figure.facecolor': 'white',
         'axes.facecolor': 'white',
         'axes.edgecolor': '#d7dbe6',
@@ -92,11 +117,21 @@ def _apply_plot_style(style):
         'legend.frameon': True,
         'legend.facecolor': 'white',
         'legend.edgecolor': '#d7dbe6',
-    })
+    }
+    if style == 'paper':
+        params.update({
+            'font.size': 12,
+            'axes.labelsize': 12,
+            'axes.titlesize': 16,
+            'legend.fontsize': 9,
+            'axes.titleweight': 'semibold',
+        })
+    plt.rcParams.update(params)
 
 
-def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'):
+def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current', repeat_ids=None):
     runs = []
+    selected_repeats = {str(value) for value in repeat_ids} if repeat_ids else None
     for log_dir in log_dirs:
         root = Path(log_dir)
         if not root.exists():
@@ -104,6 +139,8 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
         for metrics in sorted(root.rglob('metrics.csv')):
             meta_path = metrics.parent / 'metadata.json'
             meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
+            if selected_repeats is not None and str(meta.get('repeat_id', '')) not in selected_repeats:
+                continue
             xs, ys, y_stds = [], [], []
             with metrics.open(newline='', encoding='utf-8') as f:
                 for row in csv.DictReader(f):
@@ -212,16 +249,14 @@ def main():
     if args.dqn_log_dir:
         log_dirs.append(args.dqn_log_dir)
     runs = load_runs(
-        log_dirs, plot_kind=args.plot_kind, x_axis=args.x_axis, metric=args.metric)
+        log_dirs,
+        plot_kind=args.plot_kind,
+        x_axis=args.x_axis,
+        metric=args.metric,
+        repeat_ids=args.repeat_ids,
+    )
     if args.align_start:
-        shifted = []
-        for run in runs:
-            if len(run['x']) < 1:
-                continue
-            run = dict(run)
-            run['x'] = run['x'] - run['x'][0]
-            shifted.append(run)
-        runs = shifted
+        runs = _align_runs_to_first_evaluation(runs)
     if args.max_x is not None:
         capped = []
         for run in runs:
@@ -259,6 +294,17 @@ def main():
         'ContextFed-SAC-lite': '#44AA99',
         'FedAvg-DQN': '#117733',
     }
+    if args.style == 'paper':
+        # Colorblind-friendly palette with a clear visual hierarchy: the
+        # proposed method is the only saturated solid curve.
+        colors.update({
+            'FedEvoFSAC-full': '#C94752',
+            'FedEvoSAC-full': '#C94752',
+            'FedAvg-SAC': '#3B82B6',
+            'FedSoftmax-SAC-noEA': '#3A9D68',
+            'FedBest-SAC': '#C7A439',
+            'RobustFed-SAC-Median': '#62528C',
+        })
     line_styles = {
         'FedEvoFSAC-full': '-',
         'FedEvoSAC-full': '-',
@@ -284,12 +330,17 @@ def main():
         env_runs = [r for r in runs if r['env'] == env]
         if not env_runs:
             continue
-        fig, ax = plt.subplots(figsize=(10, 6))
-        if args.style == 'reference':
+        paper_style = args.style == 'paper'
+        fig, ax = plt.subplots(figsize=(9.6, 5.8) if paper_style else (10, 6))
+        if args.style in ('reference', 'paper'):
             ax.set_facecolor('white')
             for spine in ax.spines.values():
                 spine.set_color('#d7dbe6')
             ax.set_axisbelow(True)
+        if paper_style:
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.tick_params(axis='both', which='major', labelsize=10.5)
         labels = sorted({r['label'] for r in env_runs})
         if args.target_x is not None:
             plot_max_x = float(args.target_x)
@@ -355,51 +406,73 @@ def main():
                 s = seed_s
             y = _smooth_nan(y, args.smooth_window)
             s = _smooth_nan(s, args.smooth_window)
+            is_proposed = label in ('FedEvoFSAC-full', 'FedEvoSAC-full')
             if np.isfinite(s).any() and np.nanmax(s) > 0:
                 ax.fill_between(
                     xs,
                     y - s,
                     y + s,
                     color=colors.get(label),
-                    alpha=0.18 if args.style == 'reference' else 0.14,
+                    alpha=(0.13 if is_proposed else 0.055) if paper_style
+                    else (0.18 if args.style == 'reference' else 0.14),
                     linewidth=0,
-                    zorder=2,
+                    zorder=2 if is_proposed else 1,
                 )
             ax.plot(
                 xs,
                 y,
-                label=f"{label} (n={len(group)})",
+                label=label if paper_style else f"{label} (n={len(group)})",
                 color=colors.get(label),
                 linestyle=line_styles.get(label, '-'),
-                linewidth=2.8 if args.style == 'reference' else 2,
+                linewidth=3.35 if paper_style and is_proposed
+                else (2.15 if paper_style else (2.8 if args.style == 'reference' else 2)),
                 solid_capstyle='round',
-                zorder=3,
+                zorder=4 if is_proposed else 3,
             )
-        if args.plot_kind == 'ablation':
+        if paper_style:
+            title = env
+        elif args.plot_kind == 'ablation':
             title = f'{env}: FedEvoSAC ablations'
         else:
             title = f'{env}: FedEvoSAC vs FedRL baselines'
-        ax.set_title(title)
-        if args.x_axis == 'progress':
+        ax.set_title(title, loc='left' if paper_style else 'center', pad=10)
+        if paper_style and args.x_axis == 'steps':
+            xlabel = 'Environment interactions ($10^6$)'
+            ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f'{value / 1e6:g}'))
+        elif args.x_axis == 'progress':
             xlabel = 'Training progress (%)'
         elif args.x_axis == 'round':
-            xlabel = 'Communication round'
+            xlabel = (
+                'Communication rounds'
+                if args.align_start else 'Communication round'
+            )
         elif args.align_start:
             xlabel = 'Environment steps since first logged evaluation'
         else:
             xlabel = 'Environment steps'
         ax.set_xlabel(xlabel)
-        ylabel = 'Evaluation return' if args.metric == 'current' else 'Best evaluation score'
+        ylabel = 'Average evaluation return' if args.metric == 'current' else 'Best evaluation score'
         ax.set_ylabel(ylabel)
-        if args.style == 'reference':
+        if paper_style:
+            ax.grid(axis='y', color='#d7dbe6', linewidth=0.85, alpha=0.8)
+            ax.grid(axis='x', color='#eef1f5', linewidth=0.7, alpha=0.75)
+            ax.margins(x=0.0, y=0.04)
+            ax.legend(
+                loc='lower right', fontsize=9, framealpha=0.96,
+                borderpad=0.55, labelspacing=0.35, handlelength=2.4,
+            )
+        elif args.style == 'reference':
             ax.grid(True, color='#d7dbe6', linewidth=0.9, alpha=0.8)
             ax.margins(x=0.0)
-            ax.legend(fontsize=8, framealpha=0.86)
+            ax.legend(loc='lower right', fontsize=8, framealpha=0.86)
         else:
             ax.grid(alpha=0.3)
-            ax.legend(fontsize=8)
+            ax.legend(loc='lower right', fontsize=8)
         fig.tight_layout()
-        fig.savefig(out / f'{env.replace("/", "_")}_comparison.png', dpi=180, bbox_inches='tight')
+        out_file = out / f'{env.replace("/", "_")}_comparison.png'
+        fig.savefig(out_file, dpi=300 if paper_style else 180, bbox_inches='tight')
+        if paper_style:
+            fig.savefig(out_file.with_suffix('.pdf'), bbox_inches='tight')
         plt.close(fig)
     print(out)
 

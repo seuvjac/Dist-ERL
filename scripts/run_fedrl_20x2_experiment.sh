@@ -9,23 +9,27 @@ EXPERIMENT_ID=${EXPERIMENT_ID:-"fedevosac_20x2_converged_$(date +%Y%m%d)"}
 REPEATS=${REPEATS:-20}
 START_REPEAT=${START_REPEAT:-1}
 END_REPEAT=${END_REPEAT:-$REPEATS}
-PARALLEL_REPEATS=${PARALLEL_REPEATS:-4}
+PARALLEL_REPEATS=${PARALLEL_REPEATS:-2}
 SEED_BASE=${SEED_BASE:-0}
-ENVS=${ENVS:-"Swimmer-v5 Walker2d-v5 Hopper-v5"}
-FED_VARIANTS=${FED_VARIANTS:-"full uniform_aggregation no_local_rl no_ea_injection raw_softmax"}
+ENVS=${ENVS:-"Walker2d-v5 Hopper-v5"}
+FED_VARIANTS=${FED_VARIANTS:-"full uniform_aggregation no_local_rl no_ea_injection raw_softmax no_heterogeneity"}
 SAC_BASELINES=${SAC_BASELINES-"fedavg_sac fedbest_sac fedsoftmax_sac_noea fedmedian_sac"}
 RUN_ROOT=${RUN_ROOT:-"logs/experiments/$EXPERIMENT_ID"}
 PLOT_ROOT=${PLOT_ROOT:-"plots_new/$EXPERIMENT_ID"}
+INCLUDE_LEGACY_REFERENCE=${INCLUDE_LEGACY_REFERENCE:-0}
 
 mkdir -p "$RUN_ROOT/fedevosac" "$RUN_ROOT/baselines" "$PLOT_ROOT"
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 export MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
 export MPLBACKEND=${MPLBACKEND:-Agg}
 
-REFERENCE_ROOT="$PLOT_ROOT/reference_single_seed"
-mkdir -p "$REFERENCE_ROOT/comparison" "$REFERENCE_ROOT/tables"
-cp -a plots/fedevosac_perenv_tuned_s0_comparison/. "$REFERENCE_ROOT/comparison/"
-cp -a plots/fedevosac_perenv_tuned_s0_tables/. "$REFERENCE_ROOT/tables/"
+if [[ "$INCLUDE_LEGACY_REFERENCE" == "1" ]]; then
+  REFERENCE_ROOT="$PLOT_ROOT/reference_single_seed"
+  mkdir -p "$REFERENCE_ROOT/comparison"
+  find plots/fedevosac_perenv_tuned_s0_comparison -maxdepth 1 -type f \
+    \( -name 'Walker2d-v5*' -o -name 'Hopper-v5*' \) \
+    -exec cp -t "$REFERENCE_ROOT/comparison" {} +
+fi
 
 MANIFEST="$PLOT_ROOT/repeat_manifest.csv"
 printf 'repeat_id,seed_slot_0,seed_slot_1,fed_log_dir,baseline_log_dir,plot_dir\n' > "$MANIFEST"
@@ -43,11 +47,26 @@ done
 printf '%s\n' \
   'Each outer repeat contains exactly two independent seeds.' \
   'Seed pairs are unique across repeats, so the aggregate result contains 40 independent seeds.' \
-  'The single-seed reference is preserved for visual comparison only and is excluded from statistics.' \
-  'Each environment renders three comparison views plus one separate ablation view (12 individual figures total).' \
-  'Main evidence: current evaluation return vs communication round with 90% CI.' \
-  'Supplement: current evaluation return vs counted environment interactions.' \
+  'The formal environment matrix is Walker2d-v5 and Hopper-v5; Swimmer is excluded.' \
+  'Legacy single-seed references are disabled by default and are always excluded from statistics.' \
+  'Each environment renders three comparison views plus one separate ablation view (8 individual figures total).' \
+  'Main evidence: current return vs communication rounds since first evaluation, with 90% CI.' \
+  'Supplement display: current return vs interactions since each run first logged a real evaluation; rewards are never shifted.' \
+  'Raw counted interaction totals remain in metrics.csv and the summary tables.' \
   'Diagnostic only: normalized training progress.' > "$PLOT_ROOT/PROTOCOL.txt"
+
+{
+  printf 'experiment_id=%s\n' "$EXPERIMENT_ID"
+  printf 'git_commit=%s\n' "$(git rev-parse HEAD)"
+  printf 'environments=%s\n' "$ENVS"
+  printf 'repeats=%s\n' "$REPEATS"
+  printf 'seeds_per_repeat=2\n'
+  printf 'seed_base=%s\n' "$SEED_BASE"
+  printf 'parallel_repeats=%s\n' "$PARALLEL_REPEATS"
+  printf 'fed_variants=%s\n' "$FED_VARIANTS"
+  printf 'sac_baselines=%s\n' "$SAC_BASELINES"
+  printf 'target_interactions_per_run=1200000\n'
+} > "$RUN_ROOT/RUN_CONFIG.env"
 
 run_repeat() {
   local repeat=$1

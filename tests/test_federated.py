@@ -1,9 +1,15 @@
 """Tests for federated aggregation helpers."""
 
 import numpy as np
+from types import SimpleNamespace
 
 from src.federated import aggregate_weight_dicts, weight_entropy
-from src.main import _aggregation_scores_from_rewards
+from src.config import (
+    FED_ABLATION_NO_LOCAL_RL,
+    FED_ABLATION_RAW_SOFTMAX,
+    FED_EVO_RL,
+)
+from src.main import _aggregation_scores_from_rewards, _apply_fed_ablation_args
 
 
 def test_fitness_weighted_aggregation_prefers_better_client():
@@ -23,6 +29,19 @@ def test_uniform_aggregation_when_scores_tie():
     aggregated = aggregate_weight_dicts(client_weights, scores=[1.0, 1.0], mode='fitness')
     assert np.allclose(aggregated['actor.0.weight'], np.array([1.0, 1.0], dtype=np.float32))
     assert weight_entropy([1.0, 1.0], mode='fitness') > 0.0
+
+
+def test_softmax_preserves_explicit_score_scale():
+    client_weights = [
+        {'actor.0.weight': np.array([0.0], dtype=np.float32)},
+        {'actor.0.weight': np.array([2.0], dtype=np.float32)},
+    ]
+    low_pressure = aggregate_weight_dicts(
+        client_weights, scores=[0.0, 1.0], mode='softmax', temperature=1.0)
+    high_pressure = aggregate_weight_dicts(
+        client_weights, scores=[0.0, 4.0], mode='softmax', temperature=1.0)
+    assert high_pressure['actor.0.weight'][0] > low_pressure['actor.0.weight'][0]
+    assert high_pressure['actor.0.weight'][0] > 1.9
 
 
 def test_normalized_score_scale_does_not_change_raw_ablation():
@@ -48,3 +67,36 @@ def test_normalized_score_scale_does_not_change_raw_ablation():
 
     assert np.allclose(scaled, 4.0 * base)
     assert np.allclose(raw, rewards)
+
+
+def test_no_local_rl_is_a_pure_ea_ablation():
+    args = SimpleNamespace(
+        mode=FED_EVO_RL,
+        fed_ablation=FED_ABLATION_NO_LOCAL_RL,
+        client_updates=64,
+        client_rollouts=2,
+        client_validation_episodes=1,
+        migration_copies=3,
+    )
+    _apply_fed_ablation_args(args)
+    assert args.client_updates == 0
+    assert args.client_rollouts == 0
+    assert args.client_validation_episodes == 0
+    assert args.migration_copies == 0
+
+
+def test_raw_softmax_ablation_uses_its_own_temperature():
+    args = SimpleNamespace(
+        mode=FED_EVO_RL,
+        fed_ablation=FED_ABLATION_RAW_SOFTMAX,
+        fed_aggregation='softmax',
+        fed_score_normalization='relative_gain',
+        fed_aggregation_temperature=4.0,
+        fed_raw_softmax_temperature=15.0,
+        fed_score_warmup_rounds=2,
+        fed_injection_warmup_rounds=2,
+    )
+    _apply_fed_ablation_args(args)
+    assert args.fed_score_normalization == 'raw'
+    assert args.fed_aggregation_temperature == 15.0
+    assert args.fed_score_warmup_rounds == 0

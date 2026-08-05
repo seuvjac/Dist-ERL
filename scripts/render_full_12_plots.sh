@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Render the paper-style 3-env figure set:
-#   3 environments x (steps/progress/round comparison + round ablation) = 12 plots.
+# Render the paper-style formal environment figure set.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -10,7 +9,7 @@ RUN_ID=${RUN_ID:-"perenv_tuned_3seed_20260711"}
 FED_LOG_DIR=${FED_LOG_DIR:-"logs/logs_fedevosac_${RUN_ID}"}
 SAC_LOG_DIR=${SAC_LOG_DIR:-"logs/logs_sac_${RUN_ID}"}
 OUT_PREFIX=${OUT_PREFIX:-"plots/fedevosac_${RUN_ID}"}
-ENVS=${ENVS:-"Swimmer-v5 Walker2d-v5 Hopper-v5"}
+ENVS=${ENVS:-"Walker2d-v5 Hopper-v5"}
 VARIANCE=${PLOT_VARIANCE:-"seed"}
 SMOOTH_WINDOW=${PLOT_SMOOTH_WINDOW:-"5"}
 STYLE=${PLOT_STYLE:-"reference"}

@@ -7,9 +7,10 @@ from src.manager import EAManager
 from src.worker import RolloutWorker
 from src.learner import RLLearner
 from src.utils.replay_buffer import HybridReplayBuffer
-from src.utils.environment import get_env_info
+from src.utils.environment import get_env_info, make_env
 from src.utils.policy_utils import build_model_template
 from src.utils.individual import Individual
+from src.main import FED_EVOSAC_ENVS
 
 
 def test_hybrid_replay_buffer():
@@ -22,6 +23,61 @@ def test_hybrid_replay_buffer():
     buffer.add_reproduced_ea_transition(obs, action, 1.0, obs, False, seed=42, generation=1)
     batch = buffer.sample(2, ea_batch_ratio=0.5)
     assert len(batch['observations']) == 2
+
+
+def test_ant_v5_continuous_env_and_client_dynamics():
+    info = get_env_info('Ant-v5')
+    assert info['state_dim'] == 105
+    assert info['action_dim'] == 8
+
+    low = make_env(
+        'Ant-v5', client_id=0, heterogeneity=0.15,
+        heterogeneity_mode='env_params_only')
+    high = make_env(
+        'Ant-v5', client_id=2, heterogeneity=0.15,
+        heterogeneity_mode='env_params_only')
+    try:
+        low_obs, _ = low.reset(seed=7)
+        high_obs, _ = high.reset(seed=7)
+        assert low_obs.shape == high_obs.shape == (105,)
+        assert not np.allclose(
+            low.unwrapped.model.body_mass,
+            high.unwrapped.model.body_mass,
+        )
+        assert low.unwrapped.model.opt.gravity[2] != high.unwrapped.model.opt.gravity[2]
+    finally:
+        low.close()
+        high.close()
+
+
+def test_pusher_v5_continuous_env_and_client_dynamics():
+    assert 'Pusher-v5' in FED_EVOSAC_ENVS
+    info = get_env_info('Pusher-v5')
+    assert info['state_dim'] == 23
+    assert info['action_dim'] == 7
+
+    low = make_env(
+        'Pusher-v5', max_episode_steps=100, client_id=0,
+        heterogeneity=0.15, heterogeneity_mode='env_params_only')
+    high = make_env(
+        'Pusher-v5', max_episode_steps=100, client_id=2,
+        heterogeneity=0.15, heterogeneity_mode='env_params_only')
+    try:
+        low_obs, _ = low.reset(seed=7)
+        high_obs, _ = high.reset(seed=7)
+        assert low_obs.shape == high_obs.shape == (23,)
+        assert low._max_episode_steps == high._max_episode_steps == 100
+        assert not np.allclose(
+            low.unwrapped.model.body_mass,
+            high.unwrapped.model.body_mass,
+        )
+        assert not np.allclose(
+            low.unwrapped.model.geom_friction,
+            high.unwrapped.model.geom_friction,
+        )
+    finally:
+        low.close()
+        high.close()
 
 
 def test_ea_manager():
@@ -73,6 +129,57 @@ def test_ea_manager_seed_reproduces_initial_population():
         assert individual_a['seed'] == individual_b['seed']
         assert np.array_equal(
             individual_a['weights'][actor_key], individual_b['weights'][actor_key])
+    ray.shutdown()
+
+
+def test_ea_manager_anchor_perturb_uses_reproducible_standard_anchor():
+    ray.init(ignore_reinit_error=True, num_cpus=2)
+    info = get_env_info('Pendulum-v1')
+    template = build_model_template(
+        info['state_dim'], info['action_dim'], algorithm='SAC', seed=123)
+    manager_a = EAManager.remote(population_size=4, seed=17)
+    manager_b = EAManager.remote(population_size=4, seed=91)
+    ray.get([
+        manager_a.initialize_population.remote(template, 'anchor_perturb', 55, 0.03),
+        manager_b.initialize_population.remote(template, 'anchor_perturb', 55, 0.03),
+    ])
+    population_a, population_b = ray.get([
+        manager_a.get_population_for_evaluation.remote(),
+        manager_b.get_population_for_evaluation.remote(),
+    ])
+    actor_key = next(key for key in template if key.startswith('actor.'))
+    assert np.array_equal(population_a[0]['weights'][actor_key], template[actor_key])
+    assert np.array_equal(
+        population_a[1]['weights'][actor_key], population_b[1]['weights'][actor_key])
+    assert not np.array_equal(
+        population_a[0]['weights'][actor_key], population_a[1]['weights'][actor_key])
+    ray.shutdown()
+
+
+def test_ea_manager_antithetic_init_pairs_mean_actor_and_freezes_log_std():
+    ray.init(ignore_reinit_error=True, num_cpus=1)
+    info = get_env_info('Pendulum-v1')
+    template = build_model_template(
+        info['state_dim'], info['action_dim'], algorithm='SAC', seed=123)
+    manager = EAManager.remote(
+        population_size=5,
+        seed=17,
+        ga_config={
+            'actor_exclude_substrings': ('actor.log_std.',),
+            'mutation_scale_floor': 0.05,
+        },
+    )
+    ray.get(manager.initialize_population.remote(
+        template, 'anchor_antithetic', 55, 0.12))
+    population = ray.get(manager.get_population_for_evaluation.remote())
+    mean_key = next(key for key in template if key.startswith('actor.mean.'))
+    log_std_key = next(key for key in template if key.startswith('actor.log_std.'))
+    assert np.allclose(
+        population[1]['weights'][mean_key] + population[2]['weights'][mean_key],
+        2.0 * template[mean_key],
+    )
+    assert np.array_equal(population[0]['weights'][log_std_key], template[log_std_key])
+    assert np.array_equal(population[1]['weights'][log_std_key], template[log_std_key])
     ray.shutdown()
 
 

@@ -8,7 +8,7 @@ export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 FED_LOG_DIR=${FED_LOG_DIR:?FED_LOG_DIR is required}
 SAC_LOG_DIR=${SAC_LOG_DIR:-""}
 OUT_ROOT=${OUT_ROOT:?OUT_ROOT is required}
-ENVS=${ENVS:-"Swimmer-v5 Walker2d-v5 Hopper-v5"}
+ENVS=${ENVS:-"Walker2d-v5 Hopper-v5"}
 VARIANCE=${PLOT_VARIANCE:-"ci90"}
 SMOOTH_WINDOW=${PLOT_SMOOTH_WINDOW:-"7"}
 
@@ -27,6 +27,7 @@ render_individual() {
     --smooth-window "$SMOOTH_WINDOW" \
     --style reference \
     --no-raw-traces \
+    --align-start \
     --envs $ENVS
 }
 
@@ -46,6 +47,7 @@ python3 scripts/plot_fedrl_heterogeneous.py \
   --smooth-window "$SMOOTH_WINDOW" \
   --style reference \
   --no-raw-traces \
+  --align-start \
   --envs $ENVS
 
 mkdir -p "$OUT_ROOT/paper_figures" "$OUT_ROOT/tables"
@@ -60,6 +62,7 @@ for AXIS in round steps progress; do
     --metric current \
     --variance "$VARIANCE" \
     --smooth-window "$SMOOTH_WINDOW" \
+    --align-start \
     --envs $ENVS
 done
 
@@ -72,6 +75,7 @@ python3 scripts/plot_fedrl_paper_panels.py \
   --metric current \
   --variance "$VARIANCE" \
   --smooth-window "$SMOOTH_WINDOW" \
+  --align-start \
   --envs $ENVS
 
 python3 scripts/summarize_fedrl_results.py \
