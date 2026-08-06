@@ -124,6 +124,7 @@ class FederatedClient:
         policy_exploration_noise: float = 0.1,
         seed: int = 0,
         actor_lr: Optional[float] = None,
+        env_kwargs: Optional[Dict[str, Any]] = None,
     ):
         self.client_id = int(client_id)
         self.env_name = env_name
@@ -139,6 +140,7 @@ class FederatedClient:
         self.policy_exploration_noise = policy_exploration_noise
         self.seed = int(seed)
         self.actor_lr = float(actor_lr) if actor_lr is not None else float(lr)
+        self.env_kwargs = dict(env_kwargs or {})
 
         env_info = get_env_info(env_name)
         self.state_dim = env_info['state_dim']
@@ -233,6 +235,7 @@ class FederatedClient:
             client_id=self.client_id,
             heterogeneity=self.heterogeneity,
             heterogeneity_mode=self.heterogeneity_mode,
+            **self.env_kwargs,
         )
         self._actor_eval.load_weights(weights)
         rewards = []
@@ -333,6 +336,7 @@ class FederatedClient:
             client_id=self.client_id,
             heterogeneity=self.heterogeneity,
             heterogeneity_mode=self.heterogeneity_mode,
+            **self.env_kwargs,
         )
         total_reward = 0.0
         total_steps = 0

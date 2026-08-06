@@ -9,9 +9,11 @@ from src.worker import RolloutWorker
 from src.learner import RLLearner
 from src.utils.replay_buffer import HybridReplayBuffer
 from src.utils.environment import get_env_info, make_env
+from src.utils.policies import SACPolicy
 from src.utils.policy_utils import build_model_template
 from src.utils.individual import Individual
 from src.main import FED_EVOSAC_ENVS
+from scripts.train_continuous_sac_baseline import _rollout as baseline_rollout
 
 
 def test_hybrid_replay_buffer():
@@ -127,6 +129,7 @@ def test_federated_walker_evaluation_reports_locomotion_diagnostics():
         heterogeneity=0.30,
         heterogeneity_mode='env_params_only',
         seed=7,
+        env_kwargs={'healthy_reward': 0.05, 'forward_reward_weight': 1.0},
     )
     result = ray.get(client.evaluate_weights.remote(weights, seed=99, num_episodes=1))
     assert 0 < result['episode_length_mean'] <= 25
@@ -135,7 +138,28 @@ def test_federated_walker_evaluation_reports_locomotion_diagnostics():
     assert np.isfinite(result['ctrl_return_mean'])
     assert np.isfinite(result['x_displacement_mean'])
     assert np.isfinite(result['x_velocity_mean'])
+    assert result['survive_return_mean'] <= 0.05 * result['episode_length_mean'] + 1e-6
     ray.shutdown()
+
+
+def test_baseline_walker_rollout_uses_locomotion_reward_profile():
+    info = get_env_info('Walker2d-v5')
+    policy = SACPolicy(info['state_dim'], info['action_dim'])
+    _, _, steps, diagnostics = baseline_rollout(
+        policy,
+        'Walker2d-v5',
+        max_steps=25,
+        seed=101,
+        client_id=2,
+        heterogeneity=0.30,
+        heterogeneity_mode='env_params_only',
+        train=False,
+        env_kwargs={'healthy_reward': 0.05, 'forward_reward_weight': 1.0},
+    )
+    assert 0 < steps <= 25
+    assert diagnostics['episode_length_mean'] == steps
+    assert diagnostics['survive_return_mean'] <= 0.05 * steps + 1e-6
+    assert np.isfinite(diagnostics['x_velocity_mean'])
 
 
 def test_ea_manager():

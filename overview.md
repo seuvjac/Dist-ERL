@@ -1,28 +1,30 @@
 # FedEvoSAC / Dist-ERL
 
-> 最后核对：2026-08-06。当前主线是连续动作 `FedEvoSAC`。新一轮论文级正式实验仅使用
-> `Walker2d-v5` 和 `Hopper-v5`，按 20 个 repeat x 2 个独立 seed 组织，共 40 个独立 seed。
+> 最后核对：2026-08-06。当前主线是连续动作 `FedEvoSAC`。新一轮论文级正式实验计划使用
+> `Walker2d-Locomotion` profile 和 `Hopper-v5`，按 20 个 repeat x 2 个独立 seed 组织，共 40 个独立 seed。
 > `fedevosac_formal_20x2_walker_hopper_20260805` 在完成 4 个 repeat 后暂停：Walker2d
-> 出现约 1000 分的存活奖励局部最优。已完成和部分日志保留，新旧异质性协议不合并统计。
+> 出现约 1000 分的存活奖励局部最优。新版 Walker profile 已通过 3-seed locomotion pilot，
+> 可以恢复小规模横向和消融验证，但在这些验证通过前不恢复 40-seed 正式实验；
+> 已完成和部分日志保留，新旧任务定义不合并统计。
 
 ## 1. Federated RL 问题设定
 
 本项目研究异质 client 下的连续动作 Federated RL。当前正式实验使用两个 MuJoCo 环境：
 
 ```text
-Walker2d-v5
+Walker2d-Locomotion (基于 Walker2d-v5)
 Hopper-v5
 ```
 
 每个 client 拥有自己的私有环境、私有 replay buffer 和本地 SAC learner。client 之间不共享 trajectory，服务器只能接收 actor 参数、reward / fitness 等标量统计信息；critic、target critic、temperature 和 replay buffer 全部留在本地。
 
-框架仍支持 Swimmer 及动力学、观测、动作、reward-scale 扰动，但 Swimmer 的历史多 seed 方差过大，且修复后的消融尚未形成可靠证据，因此从 `2026-08-05` 起退出正式主实验、消融和论文图。旧日志继续保留以便审计，代码支持仅用于复现历史结果。开发版对 Walker2d 和 Hopper 都启用 `env_params_only` dynamics heterogeneity，强度分别为 `0.30` 和 `0.25`；新版 Walker 协议必须先通过 locomotion pilot 才能恢复正式消融。
+框架仍支持 Swimmer 及动力学、观测、动作、reward-scale 扰动，但 Swimmer 的历史多 seed 方差过大，且修复后的消融尚未形成可靠证据，因此从 `2026-08-05` 起退出正式主实验、消融和论文图。旧日志继续保留以便审计，代码支持仅用于复现历史结果。开发版对 Walker2d 和 Hopper 都启用 `env_params_only` dynamics heterogeneity，强度分别为 `0.30` 和 `0.25`；新版 Walker 协议已通过 locomotion pilot，下一步先恢复小规模横向和消融验证。`Walker2d-Locomotion` 是显式配置的任务变体，不与 Gymnasium 默认 Walker2d 成绩直接比较。
 
 异质性来自不同 client 的局部 MDP 扰动：
 
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
-| `Walker2d-v5` | continuous | gravity、左右腿质量/惯量、左右关节阻尼、脚底摩擦、左右执行器 gear；reward 不缩放 |
+| `Walker2d-Locomotion` | continuous | 基于 `Walker2d-v5`；gravity、左右腿质量/惯量、左右关节阻尼、脚底摩擦、左右执行器 gear；`healthy_reward=0.05`、`forward_reward_weight=1.0` |
 | `Hopper-v5` | continuous | gravity、body mass、joint damping、geom friction、reward scale、observation/action perturbation |
 
 框架支持以下五种异质联邦场景：
@@ -54,7 +56,7 @@ FedEvoSAC
 当前连续正式主实验环境：
 
 ```text
-Walker2d-v5
+Walker2d-Locomotion (基于 Walker2d-v5)
 Hopper-v5
 ```
 
@@ -272,9 +274,9 @@ FedEvoSAC-raw_softmax
 | `RobustFed-SAC-Median` | client actor 做逐参数 median 聚合，critic 保持本地 | 鲁棒聚合思想在异质 client 下是否改善稳定性 |
 | `FedEvoSAC` | continuous SAC 本地学习 + federated actor aggregation + EA actor population | EA 是否能在连续异质控制中提供更稳探索和更好 actor 多样性 |
 
-四个联邦 SAC baseline 使用相同的稳定聚合协议。client 先连续执行多个本地 rollout/update round，再按各自的 FedAvg、FedBest、Softmax 或 Median 规则产生 actor candidate。server 使用 `server_learning_rate` 将 candidate 与上一全局 actor 小步融合，并在固定 validation seeds 上验收；只有不降低当前全局评估回报的 candidate 才广播。critic、temperature 和 replay buffer 始终保留在 client。主图画已验收的全局 actor，candidate 辅助图画聚合候选，因此既能展示学习过程，也能避免一次不稳定聚合永久破坏策略。
+四个联邦 SAC baseline 使用相同的稳定聚合协议。client 先连续执行多个本地 rollout/update round，再按各自的 FedAvg、FedBest、Softmax 或 Median 规则产生 actor candidate。server 使用 `server_learning_rate` 将 candidate 与上一全局 actor 小步融合，并在固定 validation seeds 上验收；只有不降低当前全局评估回报的 candidate 才广播。训练和 validation 都使用与 FedEvoSAC 相同的异质 client suite，不再在同质环境中验收异质环境训练出的 actor。critic、temperature 和 replay buffer 始终保留在 client。主图画已验收的全局 actor，candidate 辅助图画聚合候选，因此既能展示学习过程，也能避免一次不稳定聚合永久破坏策略。
 
-为避免旧实现中“每收集 1000 个 transition 只更新 4 次”的欠训练问题，baseline 按新采样量计算有限的本地 SAC 更新数：`updates = min(max(base_updates, ceil(new_steps * update_to_data_ratio)), max_updates_per_round)`。当前统一协议使用 `update_to_data_ratio=0.05`、上限 `20`。联邦聚合替换 actor 参数后清空 actor optimizer 的陈旧 Adam 动量，并执行少量 critic-only warm-up；本地 critic optimizer、temperature optimizer 和 replay buffer 全部保留。FedAvg、FedBest、FedSoftmax 和 Median 的原聚合思想保持不变。
+为避免旧实现中“每收集 1000 个 transition 只更新 4 次”的欠训练问题，baseline 按新采样量计算有限的本地 SAC 更新数：`updates = min(max(base_updates, ceil(new_steps * update_to_data_ratio)), max_updates_per_round)`。通用默认值仍为 `update_to_data_ratio=0.05`、上限 `20`；Walker locomotion pilot 使用 `0.25`、上限 `256`、基础更新 `64`、actor learning rate `1e-4`，并在 actor 同步后进行 `32` 次 critic-only warm-up。联邦聚合替换 actor 参数后清空 actor optimizer 的陈旧 Adam 动量；本地 critic optimizer、temperature optimizer 和 replay buffer 全部保留。FedAvg、FedBest、FedSoftmax 和 Median 的原聚合思想保持不变。
 
 外部论文原代码复现作为单独的 external-original comparison 管理，不直接和同协议内部基线混名。原因是这些仓库支持的环境、依赖和训练协议不同；能在相同环境上运行的才放入外部复现图。外部复现结果不参与 FedEvoSAC 消融图，也不和内部同协议曲线混称为同一类 baseline。
 
@@ -310,7 +312,7 @@ BUDGET_PRESET=converged
 默认连续环境：
 
 ```text
-Walker2d-v5
+Walker2d-Locomotion (脚本参数仍为 Walker2d-v5)
 Hopper-v5
 ```
 
@@ -331,7 +333,7 @@ HalfCheetah 和 Swimmer 已从正式主实验中移除。旧 `perenv_tuned_s0` �
 - `EAManager` 和每个 Ray `FederatedClient` 显式接收实验 seed；manager 持有私有 Python/NumPy RNG，并将其传入每一代交叉、变异、immigrant 和 injection，避免 `erl_re2_epoch()` 每代临时创建未受控随机源；
 - EA population 使用 `anchor_antithetic`：一个个体保持标准 SAC anchor，其余个体围绕 anchor 做成对的 `+delta/-delta` 层尺度扰动；`log_std` 不扰动。population 固定为 `13`，由一个 anchor 和六对 antithetic 个体组成；
 - archive 连续若干代未达到最小增益时，保留 archive elite，并围绕 archive elite 对底部个体做受控增强变异，不再重新生成整网高斯随机 actor；最多 boost `2` 次，两次至少间隔 `12` 代；
-- 每 client 执行 `64` 次本地 SAC 更新，其中前 `32` 次 critic-only warm-up，actor learning rate 为 `1e-4`；前两次聚合跳过 injection；
+- Hopper 每 client 执行 `64` 次本地 SAC 更新，其中前 `32` 次 critic-only warm-up，actor learning rate 为 `1e-4`；Walker locomotion pilot 提高为 `256 / 192 / 3e-5`，让 critic 在长 horizon 数据上先校准，再以较小 actor learning rate 更新；前两次聚合均跳过 injection；
 - 每个 client 在上传前对 base/local actor 做 common-seed deterministic validation；local actor 低于 base 时上传 base actor，并记录 `local_candidate_accept_rate` 与 `local_candidate_gain_mean`；
 - archive 与 injection 采用跨 client risk-adjusted score 验收，风险惩罚系数为 `0.25`，降低幸运轨迹进入 archive 的概率；
 - `env_params_only` 的扰动只在环境 wrapper 中执行，client 不再重复施加 reward scale/action noise。
@@ -342,12 +344,18 @@ Walker2d 的 `relative_gain` 聚合曾经过于接近 uniform averaging，导致
 
 | 环境 | `client_heterogeneity` | `client_heterogeneity_mode` | 目的 |
 |------|------------------------|-----------------------------|------|
-| `Walker2d-v5` | `0.30` | `env_params_only` | 中间 client 保持原始动力学，两侧 client 使用镜像左右腿质量/惯量、阻尼、摩擦、motor gear 和小幅重力差异；reward 保持标准定义 |
+| `Walker2d-Locomotion` | `0.30` | `env_params_only` | 中间 client 保持原始动力学，两侧 client 使用镜像左右腿质量/惯量、阻尼、摩擦、motor gear 和小幅重力差异；所有方法统一使用 `healthy_reward=0.05`、`forward_reward_weight=1.0` |
 | `Hopper-v5` | `0.25` | `env_params_only` | 使用 mild dynamics heterogeneity，避免 reward-scale 引入过大的 eval 方差 |
 
-旧 Walker `0.15` profile 只统一缩放全身质量、重力、阻尼和摩擦，对稳定站立策略影响很小。20260805 批次的 8 个完整 seed 中，各消融最终回报集中在约 `980-1007`；Walker2d 默认每个 healthy timestep 提供 `+1`，1000-step horizon 因此可能把“站满 1000 步但几乎不前进”误判为收敛。20260806 起使用 gait-structured profile，并在每次 archive evaluation 记录 `episode_length`、`forward_return`、`survive_return`、`ctrl_return`、`x_displacement` 和 `x_velocity`。总回报仍采用 Gymnasium 默认 reward，不通过隐藏 reward shaping 美化分数。
+旧 Walker `0.15` profile 只统一缩放全身质量、重力、阻尼和摩擦，对稳定站立策略影响很小。20260805 批次的 8 个完整 seed 中，各消融最终回报集中在约 `980-1007`；Walker2d 默认每个 healthy timestep 提供 `+1`，1000-step horizon 因此可能把“站满 1000 步但几乎不前进”误判为收敛。20260806 的第一版 gait-structured pilot 仍使用 Gymnasium 默认 reward，并在每次 archive evaluation 记录 `episode_length`、`forward_return`、`survive_return`、`ctrl_return`、`x_displacement` 和 `x_velocity`。
 
-`fedevosac_walker_gait_hetero_pilot_3seed_20260806` 使用 `0.30` profile、seed `0/1/2` 和约 300k counted interactions。最终分别为：`1044.93 / 1000 steps / x_vel 0.049`、`333.16 / 220 steps / x_vel 0.526`、`896.45 / 813 steps / x_vel 0.147`。这说明结构化异质性能够区分“长时间站立”和“短暂前进”，但三 seed 回报为 `758.18 +/- 375.49`，方差高于旧 `0.15` profile 在相近预算下的 `807.49 +/- 185.33`。因此 `0.30` 当前只是诊断候选，尚未获准进入正式消融；继续增大异质性不能替代对 healthy-reward 局部最优和 SAC 更新不足的修复。
+`fedevosac_walker_gait_hetero_pilot_3seed_20260806` 使用 `0.30` profile、默认 reward、seed `0/1/2` 和约 300k counted interactions。最终分别为：`1044.93 / 1000 steps / x_vel 0.049`、`333.16 / 220 steps / x_vel 0.526`、`896.45 / 813 steps / x_vel 0.147`。这说明结构化异质性能够区分“长时间站立”和“短暂前进”，但三 seed 回报为 `758.18 +/- 375.49`，方差高于旧 `0.15` profile 在相近预算下的 `807.49 +/- 185.33`。因此继续增大异质性不能替代对 healthy-reward 局部最优和 SAC 更新不足的修复。
+
+第二版 pilot 将 `healthy_reward` 从 `1.0` 降为 `0.2`，保持 `forward_reward_weight=1.0`，同时增加 critic warm-up 和 SAC update-to-data ratio。`fedevosac_walker_locomotion_v2_pilot_3seed_20260806` 在约 300k counted interactions 下得到总回报 `172.52 +/- 22.98`，但速度为 `0.474 +/- 0.431`：seed 1/2 达到 `0.729 / 0.716`，seed 0 却站满 1000 步并以速度 `-0.024` 后退，其 `200` 分 healthy reward 仍足以覆盖前进不足。因此 `0.2` 降低了总分方差，却没有彻底消除 survival shortcut。
+
+当前第三版 `Walker2d-Locomotion` 将 `healthy_reward` 进一步降为 `0.05`，使站满 1000 步最多只获得 `50` 分 healthy reward。对第二版轨迹的离线重算显示，seed 0 第 7 代的正向策略约为 `124.9` 分，而后来的站立策略约为 `24.7` 分，因此 archive 不应再用站立策略淘汰行走策略。它仍使用 Gymnasium 官方 Walker2d 参数接口，但属于新的任务定义；论文、图题、表格和 metadata 必须写明两个 reward 参数，不能简称为标准 `Walker2d-v5`，也不能与旧默认 reward 或 `0.2` 数据合并。所有 FedEvoSAC、baseline 和消融方法使用完全相同的任务参数与异质 client validation suite，因此该修改用于消除共同的生存奖励捷径，不给主算法单独加分。
+
+`fedevosac_walker_locomotion_v3_pilot_3seed_20260806` 使用 seed `0/1/2` 和约 300k counted interactions。最终回报为 `135.31 / 138.37 / 138.53`，即 `137.40 +/- 1.81`；`x_velocity` 为 `0.564 / 0.552 / 0.542`，即 `0.553 +/- 0.011`；`x_displacement` 为 `1.003 +/- 0.008`。相比第二版 `x_velocity=0.474 +/- 0.431`，第三版消除了本次三个 seed 中的站立策略，并显著降低步态方差。该结果只通过了配置筛选门槛，不是论文统计结论；正式批次前仍需用相同 profile 检查四个 baseline 和独立消融是否都能形成学习过程。
 
 正式实验不再包含 Swimmer。新版对两个环境统一采用 actor-mean EA、client-local `log_std`/temperature、local candidate rollback、risk-adjusted archive 验收和低噪声 injection。正式结论必须来自完整 40-seed aggregate；smoke test 只验证调用链，不作为性能证据。
 
@@ -475,6 +483,12 @@ python -m src.main \
 | `candidate_eval_mean` | 当前聚合训练 actor 的固定协议评估回报 |
 | `deployable_eval_mean` | server 历史最佳可部署 actor 的评估回报 |
 | `local_updates_per_worker` | 每轮每个 baseline client 实际执行的本地 SAC 更新数 |
+| `eval_episode_length_mean` | 当前可部署 actor 在异质 client suite 上的平均 episode 长度 |
+| `eval_forward_return_mean` | 当前可部署 actor 的累计前进奖励；用于识别只存活不行走的局部最优 |
+| `eval_survive_return_mean` | 当前可部署 actor 的累计 healthy reward |
+| `eval_ctrl_return_mean` | 当前可部署 actor 的累计控制代价 |
+| `eval_x_displacement_mean` | 当前可部署 actor 的平均水平位移 |
+| `eval_x_velocity_mean` | 当前可部署 actor 的平均水平速度 |
 | `communication_round` | 实际 server-client 协调轮数；FedEvoSAC 每代 population 分发/fitness 回传计 1，baseline 仅 actor 聚合时计 1 |
 | `comm_upload_bytes` | 实际上传 actor 参数量估计 |
 | `comm_full_traj_bytes` | 假设上传完整 trajectory 的通信量估计 |
@@ -560,7 +574,7 @@ logs/experiments/fedevosac_20x2_converged_20260714/
 主要风险和下一步：
 
 - Swimmer 因历史 seed sensitivity 和不稳定收敛退出正式实验；不得用旧单 seed 高分替代多 seed 结论；
-- Walker2d 的旧统一缩放异质性诱发约 1000 分的存活奖励局部最优；gait-structured `0.30` profile 和 locomotion diagnostics 需要先通过多 seed pilot，正式消融保持暂停；
+- Walker2d 的旧统一缩放异质性诱发约 1000 分的存活奖励局部最优；`Walker2d-Locomotion` 使用 gait-structured `0.30` profile、显式 `healthy_reward=0.05` 和 locomotion diagnostics，3-seed pilot 已通过，但 baseline/消融小规模复核完成前不恢复 40-seed 正式批次；
 - 旧协议下 full 没有显著优于 `raw_softmax`、`no_ea_injection`、`no_local_rl` 和 `uniform_aggregation`；修复后的独立消融需要由新版 40-seed 数据重新验证；
 - deployable 主曲线带 archive / rollback，适合衡量最终可部署性能，但可能隐藏聚合 candidate 的瞬时退化；论文必须同时报告 candidate 或明确 checkpoint 规则；
 - actor-only 共享避免 critic scale mismatch，但 client critic 完全本地化，早期本地更新仍可能噪声较大；

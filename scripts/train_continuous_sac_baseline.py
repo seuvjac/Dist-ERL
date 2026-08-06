@@ -41,6 +41,8 @@ def parse_args():
     p.add_argument('--batch-size', type=int, default=128)
     p.add_argument('--buffer-size', type=int, default=200000)
     p.add_argument('--lr', type=float, default=3e-4)
+    p.add_argument('--actor-lr', type=float, default=0.0,
+                   help='Actor learning rate; <=0 uses --lr.')
     p.add_argument('--gamma', type=float, default=0.99)
     p.add_argument('--tau', type=float, default=0.005)
     p.add_argument('--client-heterogeneity', type=float, default=0.6)
@@ -48,6 +50,8 @@ def parse_args():
                    choices=['none', 'reward_action_noise', 'env_params',
                             'env_params_only', 'mixed',
                             'reward_scale_only', 'env_params_reward_scale'])
+    p.add_argument('--walker-healthy-reward', type=float, default=1.0)
+    p.add_argument('--walker-forward-reward-weight', type=float, default=1.0)
     p.add_argument('--eval-interval', type=int, default=5)
     p.add_argument('--eval-episodes', type=int, default=3)
     p.add_argument('--log-dir', default='logs/logs_sac_continuous')
@@ -124,35 +128,87 @@ def _blend_actor_states(base, target, rate):
     }
 
 
-def _rollout(policy, env_name, max_steps, seed, client_id, heterogeneity, heterogeneity_mode, train=True):
+def _rollout(
+    policy,
+    env_name,
+    max_steps,
+    seed,
+    client_id,
+    heterogeneity,
+    heterogeneity_mode,
+    train=True,
+    env_kwargs=None,
+):
     env = make_env(env_name, max_episode_steps=max_steps, client_id=client_id,
-                   heterogeneity=heterogeneity, heterogeneity_mode=heterogeneity_mode)
+                   heterogeneity=heterogeneity, heterogeneity_mode=heterogeneity_mode,
+                   **dict(env_kwargs or {}))
     obs, _ = env.reset(seed=seed)
+    data = getattr(env.unwrapped, 'data', None)
+    qpos = getattr(data, 'qpos', None)
+    start_x = float(qpos[0]) if qpos is not None and len(qpos) else 0.0
     transitions = []
     total = 0.0
+    forward_total = 0.0
+    survive_total = 0.0
+    ctrl_total = 0.0
+    velocity_total = 0.0
+    velocity_steps = 0
     for _ in range(max_steps):
         action = clip_action(policy.get_action(obs, deterministic=not train), env.action_space)
-        next_obs, reward, terminated, truncated, _ = env.step(action)
+        next_obs, reward, terminated, truncated, info = env.step(action)
         transitions.append((obs, action, float(reward), next_obs, terminated or truncated))
         total += float(reward)
+        forward_total += float(info.get('reward_forward', 0.0))
+        survive_total += float(info.get('reward_survive', 0.0))
+        ctrl_total += float(info.get('reward_ctrl', 0.0))
+        if 'x_velocity' in info:
+            velocity_total += float(info['x_velocity'])
+            velocity_steps += 1
         obs = next_obs
         if terminated or truncated:
             break
+    qpos = getattr(getattr(env.unwrapped, 'data', None), 'qpos', None)
+    end_x = float(qpos[0]) if qpos is not None and len(qpos) else start_x
     env.close()
-    return total, transitions, len(transitions)
+    steps = len(transitions)
+    diagnostics = {
+        'episode_length_mean': float(steps),
+        'forward_return_mean': float(forward_total),
+        'survive_return_mean': float(survive_total),
+        'ctrl_return_mean': float(ctrl_total),
+        'x_displacement_mean': float(end_x - start_x),
+        'x_velocity_mean': float(velocity_total / max(1, velocity_steps)),
+    }
+    return total, transitions, steps, diagnostics
 
 
-def _evaluate(policies, env_name, max_steps, seed, episodes):
+def _evaluate(
+    policies,
+    env_name,
+    max_steps,
+    seed,
+    episodes,
+    heterogeneity,
+    heterogeneity_mode,
+    env_kwargs,
+):
     rewards = []
+    diagnostics = []
     total_steps = 0
     for wid, policy in enumerate(policies):
         for ep in range(episodes):
-            reward, _, steps = _rollout(
+            reward, _, steps, episode_diagnostics = _rollout(
                 policy, env_name, max_steps, seed + wid * 1000 + ep,
-                wid, 0.0, 'none', train=False)
+                wid, heterogeneity, heterogeneity_mode, train=False,
+                env_kwargs=env_kwargs)
             rewards.append(reward)
+            diagnostics.append(episode_diagnostics)
             total_steps += steps
-    return float(np.mean(rewards)), float(np.std(rewards)), int(total_steps)
+    diagnostic_mean = {
+        key: float(np.mean([row[key] for row in diagnostics]))
+        for key in diagnostics[0]
+    } if diagnostics else {}
+    return float(np.mean(rewards)), float(np.std(rewards)), int(total_steps), diagnostic_mean
 
 
 def _write_row(path, row):
@@ -176,7 +232,8 @@ def main():
         optim.Adam(list(p.critic1.parameters()) + list(p.critic2.parameters()), lr=args.lr)
         for p in policies
     ]
-    actor_optimizers = [optim.Adam(p.actor.parameters(), lr=args.lr) for p in policies]
+    actor_lr = args.actor_lr if args.actor_lr > 0 else args.lr
+    actor_optimizers = [optim.Adam(p.actor.parameters(), lr=actor_lr) for p in policies]
     alpha_optimizers = [optim.Adam([p.log_alpha], lr=args.lr) for p in policies]
     buffers = [HybridReplayBuffer(args.buffer_size) for _ in range(args.num_workers)]
     critic_warmup_remaining = [
@@ -201,9 +258,16 @@ def main():
     best_actor_state = None
     rollback_count = 0
     scores = np.zeros(args.num_workers, dtype=np.float64)
-    global_eval, global_eval_std, initial_eval_steps = _evaluate(
+    env_kwargs = {}
+    if args.env == 'Walker2d-v5':
+        env_kwargs = {
+            'healthy_reward': float(args.walker_healthy_reward),
+            'forward_reward_weight': float(args.walker_forward_reward_weight),
+        }
+    global_eval, global_eval_std, initial_eval_steps, global_diagnostics = _evaluate(
         policies, args.env, args.max_episode_steps, args.seed + 70_000_003,
-        args.aggregation_eval_episodes)
+        args.aggregation_eval_episodes, args.client_heterogeneity,
+        args.client_heterogeneity_mode, env_kwargs)
     total_steps += initial_eval_steps
     round_idx = 0
     communication_round = 0
@@ -215,9 +279,10 @@ def main():
         worker_rewards = []
         round_update_counts = []
         for wid, policy in enumerate(policies):
-            reward, transitions, steps = _rollout(
+            reward, transitions, steps, _ = _rollout(
                 policy, args.env, args.max_episode_steps, args.seed + round_idx * 10000 + wid,
-                wid, args.client_heterogeneity, args.client_heterogeneity_mode, train=True)
+                wid, args.client_heterogeneity, args.client_heterogeneity_mode, train=True,
+                env_kwargs=env_kwargs)
             worker_rewards.append(reward)
             scores[wid] = 0.9 * scores[wid] + reward
             total_steps += steps
@@ -273,9 +338,10 @@ def main():
                 optimizer.state.clear()
             for policy in policies:
                 _load_actor_state(policy, proposed_state)
-            proposal_mean, proposal_std, proposal_eval_steps = _evaluate(
+            proposal_mean, proposal_std, proposal_eval_steps, proposal_diagnostics = _evaluate(
                 policies, args.env, args.max_episode_steps, args.seed + 70_000_003,
-                args.aggregation_eval_episodes)
+                args.aggregation_eval_episodes, args.client_heterogeneity,
+                args.client_heterogeneity_mode, env_kwargs)
             total_steps += proposal_eval_steps
             if (
                 args.disable_deployment_rollback
@@ -284,6 +350,7 @@ def main():
                 global_actor_state = proposed_state
                 global_eval = proposal_mean
                 global_eval_std = proposal_std
+                global_diagnostics = proposal_diagnostics
             else:
                 checkpoint_retained = 1
                 rollback_count += 1
@@ -294,11 +361,13 @@ def main():
                 for _ in range(args.num_workers)
             ]
         elif args.baseline_mode == 'independent_sac':
-            proposal_mean, proposal_std, proposal_eval_steps = _evaluate(
+            proposal_mean, proposal_std, proposal_eval_steps, proposal_diagnostics = _evaluate(
                 policies, args.env, args.max_episode_steps, args.seed + 70_000_003,
-                args.aggregation_eval_episodes)
+                args.aggregation_eval_episodes, args.client_heterogeneity,
+                args.client_heterogeneity_mode, env_kwargs)
             total_steps += proposal_eval_steps
             global_eval, global_eval_std = proposal_mean, proposal_std
+            global_diagnostics = proposal_diagnostics
 
         if (
             round_idx % args.eval_interval == 0
@@ -306,9 +375,10 @@ def main():
             or (args.target_env_steps <= 0 and round_idx == args.rounds - 1)
         ):
             if not np.isfinite(proposal_mean):
-                proposal_mean, proposal_std, proposal_eval_steps = _evaluate(
+                proposal_mean, proposal_std, proposal_eval_steps, proposal_diagnostics = _evaluate(
                     policies, args.env, args.max_episode_steps, args.seed + 70_000_003,
-                    args.aggregation_eval_episodes)
+                    args.aggregation_eval_episodes, args.client_heterogeneity,
+                    args.client_heterogeneity_mode, env_kwargs)
                 total_steps += proposal_eval_steps
             deploy_mean, deploy_std = global_eval, global_eval_std
             if deploy_mean >= best_eval:
@@ -344,6 +414,7 @@ def main():
                 'candidate_eval_mean': proposal_mean,
                 'candidate_eval_std': proposal_std,
                 'local_updates_per_worker': float(np.mean(round_update_counts)),
+                **{f'eval_{key}': value for key, value in global_diagnostics.items()},
             })
             checkpoint_note = " deploy=checkpoint" if checkpoint_retained else ""
             print(

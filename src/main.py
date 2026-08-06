@@ -144,6 +144,10 @@ def parse_args():
                             'env_params_reward_scale',
                         ],
                         help='How client-local MDP heterogeneity is applied')
+    parser.add_argument('--walker-healthy-reward', type=float, default=1.0,
+                        help='Explicit Walker2d healthy reward; 1.0 is Gymnasium default')
+    parser.add_argument('--walker-forward-reward-weight', type=float, default=1.0,
+                        help='Explicit Walker2d forward reward weight')
     parser.add_argument('--fed-aggregation', type=str, default='softmax',
                         choices=['fitness', 'uniform', 'softmax'],
                         help='Federated aggregation rule for client model uploads')
@@ -315,6 +319,8 @@ def _setup_local_logger(args):
         'client_rollback_margin': args.client_rollback_margin,
         'client_heterogeneity': args.client_heterogeneity,
         'client_heterogeneity_mode': args.client_heterogeneity_mode,
+        'walker_healthy_reward': args.walker_healthy_reward,
+        'walker_forward_reward_weight': args.walker_forward_reward_weight,
         'fed_aggregation': args.fed_aggregation,
         'fed_aggregation_interval': args.fed_aggregation_interval,
         'fed_aggregation_temperature': args.fed_aggregation_temperature,
@@ -516,6 +522,12 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         args.ea_init_noise_scale,
     ))
 
+    env_kwargs = {}
+    if args.env == 'Walker2d-v5':
+        env_kwargs = {
+            'healthy_reward': float(args.walker_healthy_reward),
+            'forward_reward_weight': float(args.walker_forward_reward_weight),
+        }
     clients = [
         FederatedClient.remote(
             client_id=i,
@@ -530,6 +542,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             policy_exploration_noise=args.policy_exploration_noise,
             seed=args.seed,
             actor_lr=args.client_actor_lr if args.client_actor_lr > 0 else None,
+            env_kwargs=env_kwargs,
         )
         for i in range(args.num_clients)
     ]
