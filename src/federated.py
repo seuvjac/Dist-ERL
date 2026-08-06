@@ -236,11 +236,25 @@ class FederatedClient:
         )
         self._actor_eval.load_weights(weights)
         rewards = []
+        episode_lengths = []
+        forward_returns = []
+        survive_returns = []
+        ctrl_returns = []
+        x_displacements = []
+        x_velocities = []
         total_steps = 0
         for ep in range(num_episodes):
             reset_seed = None if seed is None else int(seed + self.seed_offset + ep)
             obs, _ = env.reset(seed=reset_seed)
+            data = getattr(env.unwrapped, 'data', None)
+            qpos = getattr(data, 'qpos', None)
+            start_x = float(qpos[0]) if qpos is not None and len(qpos) else 0.0
             total = 0.0
+            forward_total = 0.0
+            survive_total = 0.0
+            ctrl_total = 0.0
+            velocity_total = 0.0
+            velocity_steps = 0
             done = False
             truncated = False
             steps = 0
@@ -251,17 +265,37 @@ class FederatedClient:
                         action + np.random.normal(0, self.action_noise, np.shape(action)),
                         env.action_space,
                     )
-                obs, reward, done, truncated, _ = env.step(action)
+                obs, reward, done, truncated, info = env.step(action)
                 total += float(reward) * self.reward_scale
+                forward_total += float(info.get('reward_forward', 0.0))
+                survive_total += float(info.get('reward_survive', 0.0))
+                ctrl_total += float(info.get('reward_ctrl', 0.0))
+                if 'x_velocity' in info:
+                    velocity_total += float(info['x_velocity'])
+                    velocity_steps += 1
                 steps += 1
+            qpos = getattr(getattr(env.unwrapped, 'data', None), 'qpos', None)
+            end_x = float(qpos[0]) if qpos is not None and len(qpos) else start_x
             total_steps += steps
             rewards.append(total)
+            episode_lengths.append(steps)
+            forward_returns.append(forward_total)
+            survive_returns.append(survive_total)
+            ctrl_returns.append(ctrl_total)
+            x_displacements.append(end_x - start_x)
+            x_velocities.append(velocity_total / max(1, velocity_steps))
         env.close()
         return {
             'client_id': self.client_id,
             'fitness': float(np.mean(rewards)) if rewards else 0.0,
             'fitness_std': float(np.std(rewards)) if rewards else 0.0,
             'total_steps': int(total_steps),
+            'episode_length_mean': float(np.mean(episode_lengths)) if episode_lengths else 0.0,
+            'forward_return_mean': float(np.mean(forward_returns)) if forward_returns else 0.0,
+            'survive_return_mean': float(np.mean(survive_returns)) if survive_returns else 0.0,
+            'ctrl_return_mean': float(np.mean(ctrl_returns)) if ctrl_returns else 0.0,
+            'x_displacement_mean': float(np.mean(x_displacements)) if x_displacements else 0.0,
+            'x_velocity_mean': float(np.mean(x_velocities)) if x_velocities else 0.0,
         }
 
     def evaluate_weights(

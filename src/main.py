@@ -69,7 +69,19 @@ METRIC_FIELDS = [
     'candidate_eval_mean', 'candidate_eval_std', 'local_updates_per_worker',
     'local_candidate_accept_rate', 'local_candidate_gain_mean',
     'stagnation_boost_count',
+    'eval_episode_length_mean', 'eval_forward_return_mean',
+    'eval_survive_return_mean', 'eval_ctrl_return_mean',
+    'eval_x_displacement_mean', 'eval_x_velocity_mean',
 ]
+
+EVALUATION_DIAGNOSTIC_KEYS = (
+    'episode_length_mean',
+    'forward_return_mean',
+    'survive_return_mean',
+    'ctrl_return_mean',
+    'x_displacement_mean',
+    'x_velocity_mean',
+)
 
 
 def parse_args():
@@ -385,6 +397,14 @@ def _estimate_comm_bytes(population_size, state_dim, action_dim, max_episode_ste
     return int(upload), int(full_traj)
 
 
+def _mean_evaluation_diagnostics(results):
+    """Average scalar rollout diagnostics across evaluated clients."""
+    return {
+        key: float(np.mean([float(row.get(key, 0.0)) for row in results]))
+        for key in EVALUATION_DIAGNOSTIC_KEYS
+    }
+
+
 def _apply_fed_ablation_args(args) -> None:
     """Translate named FedEvoRL ablations into concrete CLI settings."""
     if args.mode != FED_EVO_RL:
@@ -580,6 +600,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                 **candidate,
                 'fitness': float(np.mean(scores)),
                 'fitness_std': float(np.std(scores)),
+                **_mean_evaluation_diagnostics(results),
             })
         ray.get(manager.update_elite_archive_evaluated.remote(
             archive_rows, args.elite_archive_size, args.archive_std_penalty))
@@ -689,6 +710,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                 'weights': aggregated,
                 'fitness': aggregated_eval_mean,
                 'fitness_std': aggregated_eval_std,
+                **_mean_evaluation_diagnostics(results),
             }], args.elite_archive_size, args.archive_std_penalty))
             inserted = ray.get(manager.inject_rl_individual.remote(
                 aggregated, args.inject_noise, args.migration_copies, args.migration_blend))
@@ -824,6 +846,18 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             ),
             'stagnation_boost': stagnation_boost,
             'stagnation_boost_count': stagnation_boost_count,
+            'eval_episode_length_mean': stats.get(
+                'archive_best_episode_length_mean', 0.0),
+            'eval_forward_return_mean': stats.get(
+                'archive_best_forward_return_mean', 0.0),
+            'eval_survive_return_mean': stats.get(
+                'archive_best_survive_return_mean', 0.0),
+            'eval_ctrl_return_mean': stats.get(
+                'archive_best_ctrl_return_mean', 0.0),
+            'eval_x_displacement_mean': stats.get(
+                'archive_best_x_displacement_mean', 0.0),
+            'eval_x_velocity_mean': stats.get(
+                'archive_best_x_velocity_mean', 0.0),
         }
         _append_local_metrics(metrics_path, log_data)
         _log(
@@ -832,6 +866,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             f"ea_best={stats['max_fitness']:.2f}, diversity={stats.get('weight_diversity', 0.0):.3f}, "
             f"clients={active_client_count}/{args.num_clients}, agg={display_aggregation}, "
             f"accept={log_data['local_candidate_accept_rate']:.2f}, "
+            f"x_vel={log_data['eval_x_velocity_mean']:.3f}, "
             f"inject_warmup={int(injection_warmup_active)}"
         )
         if args.wandb:

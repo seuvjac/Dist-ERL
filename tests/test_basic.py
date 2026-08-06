@@ -4,6 +4,7 @@ import pytest
 import numpy as np
 import ray
 from src.manager import EAManager
+from src.federated import FederatedClient
 from src.worker import RolloutWorker
 from src.learner import RLLearner
 from src.utils.replay_buffer import HybridReplayBuffer
@@ -78,6 +79,63 @@ def test_pusher_v5_continuous_env_and_client_dynamics():
     finally:
         low.close()
         high.close()
+
+
+def test_walker2d_uses_mirrored_gait_heterogeneity_without_reward_scaling():
+    low = make_env(
+        'Walker2d-v5', client_id=0, heterogeneity=0.30,
+        heterogeneity_mode='env_params_only')
+    middle = make_env(
+        'Walker2d-v5', client_id=1, heterogeneity=0.30,
+        heterogeneity_mode='env_params_only')
+    high = make_env(
+        'Walker2d-v5', client_id=2, heterogeneity=0.30,
+        heterogeneity_mode='env_params_only')
+    try:
+        low_model = low.unwrapped.model
+        middle_model = middle.unwrapped.model
+        high_model = high.unwrapped.model
+
+        # Right/left leg perturbations are mirrored across edge clients;
+        # client 1 remains the canonical center MDP.
+        assert low_model.body_mass[2] < middle_model.body_mass[2]
+        assert low_model.body_mass[5] > middle_model.body_mass[5]
+        assert high_model.body_mass[2] > middle_model.body_mass[2]
+        assert high_model.body_mass[5] < middle_model.body_mass[5]
+        assert low_model.actuator_gear[0, 0] > middle_model.actuator_gear[0, 0]
+        assert low_model.actuator_gear[3, 0] < middle_model.actuator_gear[3, 0]
+        assert high_model.actuator_gear[0, 0] < middle_model.actuator_gear[0, 0]
+        assert high_model.actuator_gear[3, 0] > middle_model.actuator_gear[3, 0]
+        assert low.unwrapped._healthy_reward == middle.unwrapped._healthy_reward == 1.0
+        assert high.unwrapped._forward_reward_weight == 1.0
+    finally:
+        low.close()
+        middle.close()
+        high.close()
+
+
+def test_federated_walker_evaluation_reports_locomotion_diagnostics():
+    ray.init(ignore_reinit_error=True, num_cpus=1)
+    info = get_env_info('Walker2d-v5')
+    weights = build_model_template(
+        info['state_dim'], info['action_dim'], algorithm='SAC', seed=7)
+    client = FederatedClient.remote(
+        client_id=0,
+        env_name='Walker2d-v5',
+        algorithm='SAC',
+        max_episode_steps=25,
+        heterogeneity=0.30,
+        heterogeneity_mode='env_params_only',
+        seed=7,
+    )
+    result = ray.get(client.evaluate_weights.remote(weights, seed=99, num_episodes=1))
+    assert 0 < result['episode_length_mean'] <= 25
+    assert np.isfinite(result['forward_return_mean'])
+    assert np.isfinite(result['survive_return_mean'])
+    assert np.isfinite(result['ctrl_return_mean'])
+    assert np.isfinite(result['x_displacement_mean'])
+    assert np.isfinite(result['x_velocity_mean'])
+    ray.shutdown()
 
 
 def test_ea_manager():

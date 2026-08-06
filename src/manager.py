@@ -9,6 +9,15 @@ from typing import List, Dict, Any, Optional
 from .utils.individual import Individual
 from .utils.erl_re2_ga import Er2GaConfig, erl_re2_epoch
 
+_ARCHIVE_DIAGNOSTIC_KEYS = (
+    'episode_length_mean',
+    'forward_return_mean',
+    'survive_return_mean',
+    'ctrl_return_mean',
+    'x_displacement_mean',
+    'x_velocity_mean',
+)
+
 
 @ray.remote
 class EAManager:
@@ -235,15 +244,21 @@ class EAManager:
             fitness = float(row['fitness'])
             fitness_std = float(row.get('fitness_std', 0.0))
             archive_score = fitness - std_penalty * fitness_std
+            archive_hyperparams = {
+                'archive_eval_std': fitness_std,
+                'archive_eval_score': archive_score,
+            }
+            archive_hyperparams.update({
+                key: float(row[key])
+                for key in _ARCHIVE_DIAGNOSTIC_KEYS
+                if key in row and np.isfinite(float(row[key]))
+            })
             candidates.append(Individual(
                 id=int(row['id']),
                 weights={key: np.array(value, copy=True) for key, value in row['weights'].items()},
                 fitness=fitness,
                 seed=int(row.get('seed', 0)),
-                hyperparams={
-                    'archive_eval_std': fitness_std,
-                    'archive_eval_score': archive_score,
-                },
+                hyperparams=archive_hyperparams,
             ))
         for ind in candidates:
             params = ind.hyperparams or {}
@@ -291,12 +306,18 @@ class EAManager:
         if not self._elite_archive:
             return {'archive_size': 0, 'archive_best': 0.0, 'archive_best_std': 0.0}
         best = self._elite_archive[0]
-        return {
+        params = best.hyperparams or {}
+        stats = {
             'archive_size': len(self._elite_archive),
             'archive_best': float(best.fitness),
-            'archive_best_std': float((best.hyperparams or {}).get('archive_eval_std', 0.0)),
-            'archive_best_score': float((best.hyperparams or {}).get('archive_eval_score', best.fitness)),
+            'archive_best_std': float(params.get('archive_eval_std', 0.0)),
+            'archive_best_score': float(params.get('archive_eval_score', best.fitness)),
         }
+        stats.update({
+            f'archive_best_{key}': float(params.get(key, 0.0))
+            for key in _ARCHIVE_DIAGNOSTIC_KEYS
+        })
+        return stats
 
     def boost_diversity(self, immigrant_fraction: float = 0.15,
                         mutation_rate: float = 0.25, mutation_strength: float = 0.15) -> int:

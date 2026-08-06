@@ -1,8 +1,9 @@
 # FedEvoSAC / Dist-ERL
 
-> 最后核对：2026-08-05。当前主线是连续动作 `FedEvoSAC`。新一轮论文级正式实验仅使用
+> 最后核对：2026-08-06。当前主线是连续动作 `FedEvoSAC`。新一轮论文级正式实验仅使用
 > `Walker2d-v5` 和 `Hopper-v5`，按 20 个 repeat x 2 个独立 seed 组织，共 40 个独立 seed。
-> `fedevosac_20x2_converged_20260714` 是上一版已完成实验，保留为历史对照，不与新版统计合并。
+> `fedevosac_formal_20x2_walker_hopper_20260805` 在完成 4 个 repeat 后暂停：Walker2d
+> 出现约 1000 分的存活奖励局部最优。已完成和部分日志保留，新旧异质性协议不合并统计。
 
 ## 1. Federated RL 问题设定
 
@@ -15,13 +16,13 @@ Hopper-v5
 
 每个 client 拥有自己的私有环境、私有 replay buffer 和本地 SAC learner。client 之间不共享 trajectory，服务器只能接收 actor 参数、reward / fitness 等标量统计信息；critic、target critic、temperature 和 replay buffer 全部留在本地。
 
-框架仍支持 Swimmer 及动力学、观测、动作、reward-scale 扰动，但 Swimmer 的历史多 seed 方差过大，且修复后的消融尚未形成可靠证据，因此从 `2026-08-05` 起退出正式主实验、消融和论文图。旧日志继续保留以便审计，代码支持仅用于复现历史结果。新版正式协议对 Walker2d 和 Hopper 都启用 mild `env_params_only` dynamics heterogeneity，强度分别为 `0.15` 和 `0.25`。
+框架仍支持 Swimmer 及动力学、观测、动作、reward-scale 扰动，但 Swimmer 的历史多 seed 方差过大，且修复后的消融尚未形成可靠证据，因此从 `2026-08-05` 起退出正式主实验、消融和论文图。旧日志继续保留以便审计，代码支持仅用于复现历史结果。开发版对 Walker2d 和 Hopper 都启用 `env_params_only` dynamics heterogeneity，强度分别为 `0.30` 和 `0.25`；新版 Walker 协议必须先通过 locomotion pilot 才能恢复正式消融。
 
 异质性来自不同 client 的局部 MDP 扰动：
 
 | 环境 | 动作类型 | client heterogeneity |
 |------|----------|----------------------|
-| `Walker2d-v5` | continuous | gravity、body mass、joint damping、geom friction、reward scale、observation/action perturbation |
+| `Walker2d-v5` | continuous | gravity、左右腿质量/惯量、左右关节阻尼、脚底摩擦、左右执行器 gear；reward 不缩放 |
 | `Hopper-v5` | continuous | gravity、body mass、joint damping、geom friction、reward scale、observation/action perturbation |
 
 框架支持以下五种异质联邦场景：
@@ -341,21 +342,25 @@ Walker2d 的 `relative_gain` 聚合曾经过于接近 uniform averaging，导致
 
 | 环境 | `client_heterogeneity` | `client_heterogeneity_mode` | 目的 |
 |------|------------------------|-----------------------------|------|
-| `Walker2d-v5` | `0.15` | `env_params_only` | mild dynamics non-IID；保留基本步态可学习性，同时检验聚合对 client dynamics 差异的适应性 |
+| `Walker2d-v5` | `0.30` | `env_params_only` | 中间 client 保持原始动力学，两侧 client 使用镜像左右腿质量/惯量、阻尼、摩擦、motor gear 和小幅重力差异；reward 保持标准定义 |
 | `Hopper-v5` | `0.25` | `env_params_only` | 使用 mild dynamics heterogeneity，避免 reward-scale 引入过大的 eval 方差 |
+
+旧 Walker `0.15` profile 只统一缩放全身质量、重力、阻尼和摩擦，对稳定站立策略影响很小。20260805 批次的 8 个完整 seed 中，各消融最终回报集中在约 `980-1007`；Walker2d 默认每个 healthy timestep 提供 `+1`，1000-step horizon 因此可能把“站满 1000 步但几乎不前进”误判为收敛。20260806 起使用 gait-structured profile，并在每次 archive evaluation 记录 `episode_length`、`forward_return`、`survive_return`、`ctrl_return`、`x_displacement` 和 `x_velocity`。总回报仍采用 Gymnasium 默认 reward，不通过隐藏 reward shaping 美化分数。
+
+`fedevosac_walker_gait_hetero_pilot_3seed_20260806` 使用 `0.30` profile、seed `0/1/2` 和约 300k counted interactions。最终分别为：`1044.93 / 1000 steps / x_vel 0.049`、`333.16 / 220 steps / x_vel 0.526`、`896.45 / 813 steps / x_vel 0.147`。这说明结构化异质性能够区分“长时间站立”和“短暂前进”，但三 seed 回报为 `758.18 +/- 375.49`，方差高于旧 `0.15` profile 在相近预算下的 `807.49 +/- 185.33`。因此 `0.30` 当前只是诊断候选，尚未获准进入正式消融；继续增大异质性不能替代对 healthy-reward 局部最优和 SAC 更新不足的修复。
 
 正式实验不再包含 Swimmer。新版对两个环境统一采用 actor-mean EA、client-local `log_std`/temperature、local candidate rollback、risk-adjusted archive 验收和低噪声 injection。正式结论必须来自完整 40-seed aggregate；smoke test 只验证调用链，不作为性能证据。
 
 Reacher 已从主环境中移出。它的短 horizon 和 dense distance reward 更适合作调试 SAC 稳定性，不适合作为 EA+FedSAC 的核心证据：FedEvoSAC 的 population search 优势容易被短任务的快速局部优化掩盖，且 evaluation variance 会显著影响结论。当前改用 `Walker2d-v5`，它同样是 MuJoCo 连续控制，但 horizon 更长、动作维度更高、步态探索更依赖 actor 多样性，更适合检验 EA + federated SAC。Hopper 的 `1000+` 回报在 MuJoCo Hopper 中并非异常上界，但仍偏中等，因此 Hopper 保留为可继续提分的 locomotion 任务。
 
-正式重复实验使用：
+已暂停的正式重复实验使用：
 
 ```bash
 EXPERIMENT_ID=fedevosac_formal_20x2_walker_hopper_20260805 \
   ./scripts/run_fedrl_20x2_experiment.sh
 ```
 
-`20x2` 表示 20 个 outer repeat，每个 repeat 恰好两个 seed。不同 repeat 使用不同 seed pair：`(0,1), (2,3), ..., (38,39)`，所以每个 repeat 的图是 `n=2`，最终 aggregate 是 40 个独立 seed；不会把完全相同的 seed 重跑 20 次后伪装成更大的独立样本量。脚本支持断点重启，已达到目标 steps 的 run 会自动跳过。
+`20x2` 表示 20 个 outer repeat，每个 repeat 恰好两个 seed。不同 repeat 使用不同 seed pair：`(0,1), (2,3), ..., (38,39)`，所以每个 repeat 的图是 `n=2`，目标 aggregate 是 40 个独立 seed；不会把完全相同的 seed 重跑 20 次后伪装成更大的独立样本量。该批次已于 2026-08-06 主动停止，旧 Walker profile 的完成结果不能用 `SKIP_EXISTING` 混入新 profile。
 
 正式启动使用 `PARALLEL_REPEATS=2`，降低多个 Ray 集群同时运行时的内存和对象存储压力；每个 repeat 的 stdout 独立写入 `logs/experiments/<experiment_id>/repeat_XX.log`，批内任务全部结束后才重画 aggregate。可通过 `START_REPEAT` / `END_REPEAT` 做分片或断点续跑。
 
@@ -555,7 +560,7 @@ logs/experiments/fedevosac_20x2_converged_20260714/
 主要风险和下一步：
 
 - Swimmer 因历史 seed sensitivity 和不稳定收敛退出正式实验；不得用旧单 seed 高分替代多 seed 结论；
-- Walker2d/Hopper 均启用 mild dynamics heterogeneity，但新版 40-seed 正式结果尚未完成，现阶段不能提前声明显著优势；
+- Walker2d 的旧统一缩放异质性诱发约 1000 分的存活奖励局部最优；gait-structured `0.30` profile 和 locomotion diagnostics 需要先通过多 seed pilot，正式消融保持暂停；
 - 旧协议下 full 没有显著优于 `raw_softmax`、`no_ea_injection`、`no_local_rl` 和 `uniform_aggregation`；修复后的独立消融需要由新版 40-seed 数据重新验证；
 - deployable 主曲线带 archive / rollback，适合衡量最终可部署性能，但可能隐藏聚合 candidate 的瞬时退化；论文必须同时报告 candidate 或明确 checkpoint 规则；
 - actor-only 共享避免 critic scale mismatch，但 client critic 完全本地化，早期本地更新仍可能噪声较大；

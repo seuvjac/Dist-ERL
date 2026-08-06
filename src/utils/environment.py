@@ -194,6 +194,48 @@ def _apply_classic_control_heterogeneity(
         scale_boost = 1.8 if mode == 'mixed' else 1.0
         if hasattr(base, 'model'):
             model = base.model
+            if env_name == 'Walker2d-v5':
+                # Walker needs gait-relevant non-IID dynamics. Uniformly
+                # scaling the whole model leaves a stable standing policy
+                # nearly unchanged, so mirror the two legs across clients.
+                body_names = [model.body(i).name for i in range(model.nbody)]
+                body_index = {name: idx for idx, name in enumerate(body_names)}
+                right_bodies = [body_index[name] for name in ('thigh', 'leg', 'foot')]
+                left_bodies = [body_index[name] for name in ('thigh_left', 'leg_left', 'foot_left')]
+                torso_idx = body_index['torso']
+
+                right_scale = max(0.65, 1.0 + 0.35 * scale_boost * strength)
+                left_scale = max(0.65, 1.0 - 0.35 * scale_boost * strength)
+                torso_scale = max(0.75, 1.0 + 0.20 * scale_boost * strength)
+                model.body_mass[right_bodies] *= right_scale
+                model.body_mass[left_bodies] *= left_scale
+                model.body_mass[torso_idx] *= torso_scale
+                if hasattr(model, 'body_inertia'):
+                    model.body_inertia[right_bodies] *= right_scale
+                    model.body_inertia[left_bodies] *= left_scale
+                    model.body_inertia[torso_idx] *= torso_scale
+
+                if hasattr(model, 'dof_damping') and model.dof_damping.shape[0] >= 9:
+                    model.dof_damping[3:6] *= max(
+                        0.50, 1.0 - 0.45 * scale_boost * strength)
+                    model.dof_damping[6:9] *= max(
+                        0.50, 1.0 + 0.45 * scale_boost * strength)
+                if hasattr(model, 'geom_friction') and model.geom_friction.ndim == 2:
+                    geom_names = [model.geom(i).name for i in range(model.ngeom)]
+                    geom_index = {name: idx for idx, name in enumerate(geom_names)}
+                    model.geom_friction[geom_index['foot_geom'], 0] *= max(
+                        0.55, 1.0 + 0.40 * scale_boost * strength)
+                    model.geom_friction[geom_index['foot_left_geom'], 0] *= max(
+                        0.55, 1.0 - 0.40 * scale_boost * strength)
+                if hasattr(model, 'actuator_gear') and model.actuator_gear.shape[0] >= 6:
+                    model.actuator_gear[:3, 0] *= max(
+                        0.60, 1.0 - 0.50 * scale_boost * strength)
+                    model.actuator_gear[3:6, 0] *= max(
+                        0.60, 1.0 + 0.50 * scale_boost * strength)
+                if hasattr(model, 'opt') and hasattr(model.opt, 'gravity'):
+                    model.opt.gravity[2] = -9.81 * max(
+                        0.70, 1.0 + 0.15 * scale_boost * strength)
+                return
             if env_name == 'Swimmer-v5':
                 if hasattr(model, 'body_mass'):
                     model.body_mass[:] = model.body_mass[:] * max(
