@@ -411,6 +411,8 @@ PLOT_ROOT=plots/formal_candidates/fedevosac_formal_20x2_relative_20260809 \
 
 20 个 repeat 对应 seed pair `(3,4), (5,6), ..., (41,42)`，与开发 seed `0/1/2` 完全分离。正式目录保存全部结果，不执行 Full-win 过滤；任何 post-hoc 示例图只能放入 diagnostics 并显式标注，不能替代 aggregate。
 
+该批次已于 2026-08-09 从 Git commit `3b6b50b` 后台启动。原始日志写入 `logs/experiments/fedevosac_formal_20x2_relative_20260809/`，完整候选图写入 `plots/formal_candidates/fedevosac_formal_20x2_relative_20260809/`。为避免根分区 95% 使用率触发 Ray 的默认 spilling 拒绝阈值，启动进程显式设置 `RAY_local_fs_capacity_threshold=0.99`；该设置只改变临时对象落盘阈值，不改变算法、环境或统计口径。
+
 正式启动使用 `PARALLEL_REPEATS=2`，降低多个 Ray 集群同时运行时的内存和对象存储压力；每个 repeat 的 stdout 独立写入 `logs/experiments/<experiment_id>/repeat_XX.log`，批内任务全部结束后才重画 aggregate。可通过 `START_REPEAT` / `END_REPEAT` 做分片或断点续跑。
 
 每个 repeat 的横向比较运行 `FedEvoSAC-full` 和四个联邦 SAC baseline；独立消融图复用 full，并额外运行 `no_local_rl`、`no_ea_injection` 和 `no_heterogeneity`。新版 `no_local_rl` 同时关闭 local rollout、gradient update、candidate validation 和 migration，成为只保留 EA search/archive 的 pure-EA 消融，不再把 server best 加噪后伪装成 RL injection。`no_heterogeneity` 是环境消融。`raw_softmax` 与 `uniform_aggregation` 已移至独立 aggregation screening，不计入模块消融。
