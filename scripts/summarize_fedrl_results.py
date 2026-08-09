@@ -73,7 +73,9 @@ def _include(meta, plot_kind):
         if mode == 'standard_erl' and meta.get('algorithm') == 'FSAC':
             return False
     elif plot_kind == 'ablation':
-        if mode != 'fed_evo_rl':
+        if mode != 'fed_evo_rl' or fed_abl in (
+            'raw_softmax', 'uniform_aggregation',
+        ):
             return False
     elif plot_kind == 'aggregation':
         if mode != 'fed_evo_rl' or fed_abl != 'full':

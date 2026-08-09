@@ -99,3 +99,30 @@ def test_aggregation_plot_labels_score_mode(tmp_path):
 
     assert len(runs) == 1
     assert runs[0]['label'] == 'FedEvoSAC-batch_zscore'
+
+
+def test_module_ablation_plot_excludes_aggregation_controls(tmp_path):
+    for variant in ('full', 'no_local_rl', 'raw_softmax', 'uniform_aggregation'):
+        run_dir = tmp_path / variant
+        run_dir.mkdir()
+        (run_dir / 'metadata.json').write_text(json.dumps({
+            'env': 'Walker2d-v5',
+            'mode': 'fed_evo_rl',
+            'algorithm': 'SAC',
+            'fed_ablation': variant,
+            'seed': 0,
+        }), encoding='utf-8')
+        with (run_dir / 'metrics.csv').open('w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                'total_env_steps', 'eval_reward_mean', 'eval_reward_std',
+            ])
+            writer.writeheader()
+            writer.writerow({
+                'total_env_steps': 100,
+                'eval_reward_mean': 12.5,
+                'eval_reward_std': 1.5,
+            })
+
+    labels = {run['label'] for run in load_runs([tmp_path], plot_kind='ablation')}
+
+    assert labels == {'FedEvoSAC-full', 'FedEvoSAC-no_local_rl'}
