@@ -4,7 +4,7 @@
 > `Walker2d-Locomotion` profile 和 `Hopper-v5`，按 20 个 repeat x 2 个独立 seed 组织，共 40 个独立 seed。
 > `fedevosac_formal_20x2_walker_hopper_20260805` 在完成 4 个 repeat 后暂停：Walker2d
 > 出现约 1000 分的存活奖励局部最优。新版 Walker profile 已通过 3-seed locomotion pilot，
-> 可以恢复小规模横向和消融验证，但在这些验证通过前不恢复 40-seed 正式实验；
+> 小规模横向和消融验证已经完成，当前先筛选聚合策略，再决定是否恢复 40-seed 正式实验；
 > 已完成和部分日志保留，新旧任务定义不合并统计。
 
 ## 1. Federated RL 问题设定
@@ -219,7 +219,7 @@ FedEvoSAC 聚合的是 client 上传的 actor 参数，不聚合 trajectory，�
 | score scale | Walker2d / Hopper 分别为 `8 / 1` | 在保持归一化的同时调节 client 权重区分度 |
 | reward scale EMA | `--fed-score-ema-beta 0.90` | 维护每个 client 的 reward baseline / scale |
 | federation warm-up | 前两次聚合使用 warm-up score，并跳过 injection | 避免本地 critic 尚未校准时破坏 archive elite |
-| raw softmax 消融 | `--fed-ablation raw_softmax` | 保留原始 reward softmax，用于验证归一化聚合贡献 |
+| raw softmax 敏感性对照 | `--fed-ablation raw_softmax` | 保留原始 reward softmax，用于单独筛选聚合策略，不进入模块消融图 |
 | 低分过滤 | `--fed-min-client-score-quantile 0.25` | 丢弃低质量 actor update；uniform 消融不执行该过滤 |
 | delta clipping | Walker2d / Hopper 均为 `4` | 限制 client update 的参数步长 |
 | soft injection | `blend=0.50`、noise `0.005` | 将通过独立验证的聚合 actor 低噪声注入 EA 弱个体 |
@@ -233,7 +233,7 @@ theta_fed = theta_best + sum_i w_i * delta_i
 
 这比直接平均完整 actor 更稳。聚合器直接消费上游明确生成的 raw / batch-zscore / relative-gain score，不再在 `aggregate_weight_dicts()` 内二次 z-score；因此 `fed_score_scale` 和 raw-softmax 的定义均与日志一致。
 
-默认 `FedEvoSAC-full` 使用 normalized relative softmax。`FedEvoSAC-raw_softmax` 作为消融保留旧版 raw reward softmax，用来回答：在 client reward scale 异质时，按相对提升归一化是否比直接用 episodic return 更稳定。
+默认 `FedEvoSAC-full` 使用 normalized relative softmax。`raw_softmax` 与 `uniform_aggregation` 作为聚合敏感性对照保留，用来回答：在 client reward scale 异质时，按相对提升归一化是否比直接用 episodic return 或均匀平均更稳定。它们单独进入 aggregation screening，不进入正式模块消融图。
 
 ## 9. Baseline 和对比曲线
 
@@ -247,15 +247,22 @@ RobustFed-SAC-Median
 FedEvoSAC
 ```
 
-FedEvoSAC 家族内部消融可以沿用：
+FedEvoSAC 正式模块消融为：
 
 ```text
 FedEvoSAC-full
-FedEvoSAC-uniform_aggregation
 FedEvoSAC-no_local_rl
 FedEvoSAC-no_ea_injection
 FedEvoSAC-no_heterogeneity
+```
+
+聚合策略敏感性实验单独比较：
+
+```text
+FedEvoSAC-relative_gain
+FedEvoSAC-batch_zscore
 FedEvoSAC-raw_softmax
+FedEvoSAC-uniform_aggregation
 ```
 
 仓库仍保留早期离散 `FSACPolicy`、`FedEvoFSAC` 和 DQN 代码用于历史复核，但它们已经退出当前实验协议，不参与当前主图、消融、统计结论或默认脚本。当前 overview 中的 `SAC` 均指 continuous SAC，除非明确标为 legacy discrete。
@@ -366,8 +373,8 @@ Walker2d 的 `relative_gain` 聚合曾经过于接近 uniform averaging，导致
 | baseline | `FedBest-SAC` | `136.44` (`n=1`) |
 | baseline | `FedSoftmax-SAC-noEA` | `135.13` (`n=1`) |
 | baseline | `RobustFed-SAC-Median` | `136.89` (`n=1`) |
-| ablation | `uniform_aggregation` | `147.90` (`n=1`) |
-| ablation | `raw_softmax` | `177.22` (`n=1`) |
+| aggregation diagnostic | `uniform_aggregation` | `147.90` (`n=1`) |
+| aggregation diagnostic | `raw_softmax` | `177.22` (`n=1`) |
 | ablation | `no_local_rl` | `130.50` (`n=1`) |
 | ablation | `no_ea_injection` | `106.98` (`n=1`) |
 | control | `no_heterogeneity` | `139.58` (`n=1`) |
@@ -389,7 +396,7 @@ EXPERIMENT_ID=fedevosac_formal_20x2_walker_hopper_20260805 \
 
 正式启动使用 `PARALLEL_REPEATS=2`，降低多个 Ray 集群同时运行时的内存和对象存储压力；每个 repeat 的 stdout 独立写入 `logs/experiments/<experiment_id>/repeat_XX.log`，批内任务全部结束后才重画 aggregate。可通过 `START_REPEAT` / `END_REPEAT` 做分片或断点续跑。
 
-每个 repeat 的横向比较运行 `FedEvoSAC-full` 和四个联邦 SAC baseline；独立消融图复用 full，并额外运行 `uniform_aggregation`、`no_local_rl`、`no_ea_injection`、`raw_softmax` 和 `no_heterogeneity`。新版 `no_local_rl` 同时关闭 local rollout、gradient update、candidate validation 和 migration，成为只保留 EA search/archive 的 pure-EA 消融，不再把 server best 加噪后伪装成 RL injection。`no_heterogeneity` 是环境消融，表格中与四个算法模块消融分组解释。
+每个 repeat 的横向比较运行 `FedEvoSAC-full` 和四个联邦 SAC baseline；独立消融图复用 full，并额外运行 `no_local_rl`、`no_ea_injection` 和 `no_heterogeneity`。新版 `no_local_rl` 同时关闭 local rollout、gradient update、candidate validation 和 migration，成为只保留 EA search/archive 的 pure-EA 消融，不再把 server best 加噪后伪装成 RL injection。`no_heterogeneity` 是环境消融。`raw_softmax` 与 `uniform_aggregation` 已移至独立 aggregation screening，不计入模块消融。
 
 ### Ant-v5 与 Pusher-v5 候选替换实验
 
@@ -568,7 +575,7 @@ logs/experiments/fedevosac_20x2_converged_20260714/
 
 `plots_new/selected_best_converged_20260721/` 保存了 Walker2d/Hopper 的跨批次展示候选。该目录有独立 `README.md` 和 `selection_manifest.csv`，属于 post-hoc supporting/visual collection，不能替代完整 `n=40` aggregate。Swimmer、Ant 和 Pusher 已从该论文候选目录移除。
 
-新版正式实验 `fedevosac_formal_20x2_walker_hopper_20260805` 在代码与文档同步后启动。它使用两个正式环境、40 个独立 seed、相同 counted-interaction 预算、四个非 EA 联邦 SAC baseline，以及与横向图分离的五个消融。运行中的中间图只用于监控，只有完整 aggregate 和收敛检查通过后才可作为论文证据。
+新版正式实验 `fedevosac_formal_20x2_walker_hopper_20260805` 在代码与文档同步后启动，随后因 Walker task 定义问题暂停。后续正式调度使用两个环境、40 个独立 seed、相同 counted-interaction 预算、四个非 EA 联邦 SAC baseline，以及与横向图分离的三个消融；聚合策略筛选另行运行。只有完整 aggregate 和收敛检查通过后才可作为论文证据。
 
 ## 13. 当前实现状态
 
@@ -592,7 +599,7 @@ logs/experiments/fedevosac_20x2_converged_20260714/
 
 - Swimmer 因历史 seed sensitivity 和不稳定收敛退出正式实验；不得用旧单 seed 高分替代多 seed 结论；
 - Walker2d 的旧统一缩放异质性诱发约 1000 分的存活奖励局部最优；`Walker2d-Locomotion` 使用 gait-structured `0.30` profile、显式 `healthy_reward=0.05` 和 locomotion diagnostics，3-seed pilot 已通过，小规模 baseline/消融复核也已完成；
-- 新筛选中 full 与 baseline 最终分数接近、收敛更慢，且单 seed `raw_softmax` / `uniform_aggregation` 高于 full；需先修订并预注册聚合假设，再扩大 baseline/消融 seed，当前数据不能支持 full 聚合最优；
+- 新筛选中 full 与 baseline 最终分数接近、收敛更慢，且单 seed `raw_softmax` / `uniform_aggregation` 高于 full；需先通过独立 aggregation screening 预注册聚合选择，再扩大 baseline/模块消融 seed，当前数据不能支持 full 聚合最优；
 - deployable 主曲线带 archive / rollback，适合衡量最终可部署性能，但可能隐藏聚合 candidate 的瞬时退化；论文必须同时报告 candidate 或明确 checkpoint 规则；
 - actor-only 共享避免 critic scale mismatch，但 client critic 完全本地化，早期本地更新仍可能噪声较大；
 - raw reward softmax 容易受异质 client reward scale 影响；`aggregation_entropy`、`aggregation_score_std` 和 reward-scale stress test 仍需单独分析；

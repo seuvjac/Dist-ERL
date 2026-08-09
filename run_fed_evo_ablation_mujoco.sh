@@ -13,7 +13,7 @@ source /home/ywj/anaconda3/bin/activate dist-erl-re2
 
 ENVS=${ENVS:-"Hopper-v2"}
 SEEDS=${SEEDS:-"0 1 2"}
-FED_ABLATIONS=${FED_ABLATIONS:-"full uniform_aggregation no_local_rl no_ea_injection no_heterogeneity"}
+FED_ABLATIONS=${FED_ABLATIONS:-"full no_local_rl no_ea_injection no_heterogeneity"}
 MAX_GENERATIONS_OVERRIDE=${MAX_GENERATIONS_OVERRIDE:-""}
 LOG_DIR=${LOG_DIR:-"logs"}
 
