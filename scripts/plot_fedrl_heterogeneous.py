@@ -21,7 +21,7 @@ def parse_args():
     p.add_argument('--repeat-ids', nargs='*', default=None,
                    help='Optional repeat_id values to include; useful for a documented experiment snapshot')
     p.add_argument('--plot-kind', default='comparison',
-                   choices=['comparison', 'ablation', 'all'],
+                   choices=['comparison', 'ablation', 'aggregation', 'all'],
                    help='comparison excludes FedEvoFSAC ablations and EvoSAC-noFed; ablation plots only FedEvoFSAC variants')
     p.add_argument('--x-axis', default='steps', choices=['steps', 'progress', 'round'],
                    help='Use raw env steps, per-run progress percentage, or logged generation/round as x-axis')
@@ -215,11 +215,18 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
             elif plot_kind == 'ablation':
                 if mode != 'fed_evo_rl':
                     continue
+            elif plot_kind == 'aggregation':
+                if mode != 'fed_evo_rl' or fed_abl != 'full':
+                    continue
 
             label = mode
             if mode == 'fed_evo_rl':
                 prefix = 'FedEvoSAC' if meta.get('algorithm') == 'SAC' else 'FedEvoFSAC'
-                label = f"{prefix}-{fed_abl}"
+                if plot_kind == 'aggregation':
+                    score_mode = meta.get('fed_score_normalization', 'unknown')
+                    label = f"{prefix}-{score_mode}"
+                else:
+                    label = f"{prefix}-{fed_abl}"
             elif mode == 'standard_erl' and meta.get('algorithm') == 'FSAC':
                 label = 'EvoSAC-noFed'
             elif mode == 'paper_fsac':
@@ -298,6 +305,9 @@ def main():
         'FedEvoSAC-no_heterogeneity': '#CC79A7',
         'FedEvoFSAC-raw_softmax': '#882255',
         'FedEvoSAC-raw_softmax': '#882255',
+        'FedEvoSAC-relative_gain': '#D55E00',
+        'FedEvoSAC-batch_zscore': '#0072B2',
+        'FedEvoSAC-raw': '#009E73',
         'Paper-FSAC': '#56B4E9',
         'Paper-SAC': '#999999',
         'Independent-SAC': '#999999',
@@ -334,6 +344,9 @@ def main():
         'FedEvoSAC-no_heterogeneity': '-',
         'FedEvoFSAC-raw_softmax': '-.',
         'FedEvoSAC-raw_softmax': '-.',
+        'FedEvoSAC-relative_gain': '-',
+        'FedEvoSAC-batch_zscore': '--',
+        'FedEvoSAC-raw': '-.',
         'FedAvg-SAC': ':',
         'FedSoftmax-SAC-noEA': '--',
         'FedBest-SAC': '-.',
@@ -450,6 +463,8 @@ def main():
             title = display_env
         elif args.plot_kind == 'ablation':
             title = f'{display_env}: FedEvoSAC ablations'
+        elif args.plot_kind == 'aggregation':
+            title = f'{display_env}: aggregation screening'
         else:
             title = f'{display_env}: FedEvoSAC vs FedRL baselines'
         ax.set_title(title, loc='left' if paper_style else 'center', pad=10)

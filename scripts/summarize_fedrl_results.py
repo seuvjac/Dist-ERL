@@ -24,7 +24,8 @@ def parse_args():
     p.add_argument('--paper-log-dir', default='logs/logs_fsac_paper_mixed')
     p.add_argument('--dqn-log-dir', default='logs/logs_dqn_fedrl_mixed')
     p.add_argument('--out-dir', default='plots/fedrl_tables_mixed')
-    p.add_argument('--plot-kind', default='comparison', choices=['comparison', 'ablation', 'all'])
+    p.add_argument('--plot-kind', default='comparison',
+                   choices=['comparison', 'ablation', 'aggregation', 'all'])
     p.add_argument('--envs', nargs='*', default=['CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3'])
     return p.parse_args()
 
@@ -73,6 +74,9 @@ def _include(meta, plot_kind):
             return False
     elif plot_kind == 'ablation':
         if mode != 'fed_evo_rl':
+            return False
+    elif plot_kind == 'aggregation':
+        if mode != 'fed_evo_rl' or fed_abl != 'full':
             return False
     return True
 
@@ -149,7 +153,11 @@ def main():
             vals = _run_values(metrics)
             if vals is None:
                 continue
-            grouped[(env, _label(meta, metrics.parent.name))].append(vals)
+            label = _label(meta, metrics.parent.name)
+            if args.plot_kind == 'aggregation':
+                prefix = 'FedEvoSAC' if meta.get('algorithm') == 'SAC' else 'FedEvoFSAC'
+                label = f"{prefix}-{meta.get('fed_score_normalization', 'unknown')}"
+            grouped[(env, label)].append(vals)
 
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
