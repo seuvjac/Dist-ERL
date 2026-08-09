@@ -355,7 +355,24 @@ Walker2d 的 `relative_gain` 聚合曾经过于接近 uniform averaging，导致
 
 当前第三版 `Walker2d-Locomotion` 将 `healthy_reward` 进一步降为 `0.05`，使站满 1000 步最多只获得 `50` 分 healthy reward。对第二版轨迹的离线重算显示，seed 0 第 7 代的正向策略约为 `124.9` 分，而后来的站立策略约为 `24.7` 分，因此 archive 不应再用站立策略淘汰行走策略。它仍使用 Gymnasium 官方 Walker2d 参数接口，但属于新的任务定义；论文、图题、表格和 metadata 必须写明两个 reward 参数，不能简称为标准 `Walker2d-v5`，也不能与旧默认 reward 或 `0.2` 数据合并。所有 FedEvoSAC、baseline 和消融方法使用完全相同的任务参数与异质 client validation suite，因此该修改用于消除共同的生存奖励捷径，不给主算法单独加分。
 
-`fedevosac_walker_locomotion_v3_pilot_3seed_20260806` 使用 seed `0/1/2` 和约 300k counted interactions。最终回报为 `135.31 / 138.37 / 138.53`，即 `137.40 +/- 1.81`；`x_velocity` 为 `0.564 / 0.552 / 0.542`，即 `0.553 +/- 0.011`；`x_displacement` 为 `1.003 +/- 0.008`。相比第二版 `x_velocity=0.474 +/- 0.431`，第三版消除了本次三个 seed 中的站立策略，并显著降低步态方差。该结果只通过了配置筛选门槛，不是论文统计结论；正式批次前仍需用相同 profile 检查四个 baseline 和独立消融是否都能形成学习过程。
+`fedevosac_walker_locomotion_v3_pilot_3seed_20260806` 使用 seed `0/1/2` 和约 300k counted interactions。最终回报为 `135.31 / 138.37 / 138.53`，即 `137.40 +/- 1.81`；`x_velocity` 为 `0.564 / 0.552 / 0.542`，即 `0.553 +/- 0.011`；`x_displacement` 为 `1.003 +/- 0.008`。相比第二版 `x_velocity=0.474 +/- 0.431`，第三版消除了本次三个 seed 中的站立策略，并显著降低步态方差。
+
+同一 profile 的小规模横向与消融筛选已经完成。`FedEvoSAC-full` 使用三个 seed；其余方法当前都只有 seed 0，因此下面的单 seed 数值只能诊断实现和学习过程，不能用于显著性或方差结论：
+
+| 类型 | 方法 | 300k final current return |
+|------|------|---------------------------|
+| proposed | `FedEvoSAC-full` | `137.40 +/- 1.81` (`n=3`) |
+| baseline | `FedAvg-SAC` | `135.90` (`n=1`) |
+| baseline | `FedBest-SAC` | `136.44` (`n=1`) |
+| baseline | `FedSoftmax-SAC-noEA` | `135.13` (`n=1`) |
+| baseline | `RobustFed-SAC-Median` | `136.89` (`n=1`) |
+| ablation | `uniform_aggregation` | `147.90` (`n=1`) |
+| ablation | `raw_softmax` | `177.22` (`n=1`) |
+| ablation | `no_local_rl` | `130.50` (`n=1`) |
+| ablation | `no_ea_injection` | `106.98` (`n=1`) |
+| control | `no_heterogeneity` | `139.58` (`n=1`) |
+
+这轮结果验证了 locomotion task 修复，却没有验证当前 normalized-relative-gain 聚合：full 在最终回报上只与四个 baseline 持平，并且约到 220k interactions 才接近其最终水平；四个 baseline 在约 20k--70k 内就取得 130 以上的 deployable checkpoint。`raw_softmax` 和 uniform 单 seed 又明显高于 full，说明仅含 dynamics heterogeneity、没有 reward-scale 扰动时，当前 relative-gain normalization/temperature 可能削弱了有效 client 排序。另一方面，`no_ea_injection` 明显下降，`no_local_rl` 也较低，提示 EA-to-RL injection 与本地 SAC refinement 值得保留并扩大 seed 验证。baseline 的 current 曲线主要由 rollback checkpoint 保持稳定，其 candidate 策略仍多次退化，因此后续必须同时报告 deployable current 和 candidate，而不能只凭平坦主曲线声称训练稳定。正式 40-seed 批次暂不恢复，下一步先针对聚合选择做预注册的多 seed 筛选。
 
 正式实验不再包含 Swimmer。新版对两个环境统一采用 actor-mean EA、client-local `log_std`/temperature、local candidate rollback、risk-adjusted archive 验收和低噪声 injection。正式结论必须来自完整 40-seed aggregate；smoke test 只验证调用链，不作为性能证据。
 
@@ -574,8 +591,8 @@ logs/experiments/fedevosac_20x2_converged_20260714/
 主要风险和下一步：
 
 - Swimmer 因历史 seed sensitivity 和不稳定收敛退出正式实验；不得用旧单 seed 高分替代多 seed 结论；
-- Walker2d 的旧统一缩放异质性诱发约 1000 分的存活奖励局部最优；`Walker2d-Locomotion` 使用 gait-structured `0.30` profile、显式 `healthy_reward=0.05` 和 locomotion diagnostics，3-seed pilot 已通过，但 baseline/消融小规模复核完成前不恢复 40-seed 正式批次；
-- 旧协议下 full 没有显著优于 `raw_softmax`、`no_ea_injection`、`no_local_rl` 和 `uniform_aggregation`；修复后的独立消融需要由新版 40-seed 数据重新验证；
+- Walker2d 的旧统一缩放异质性诱发约 1000 分的存活奖励局部最优；`Walker2d-Locomotion` 使用 gait-structured `0.30` profile、显式 `healthy_reward=0.05` 和 locomotion diagnostics，3-seed pilot 已通过，小规模 baseline/消融复核也已完成；
+- 新筛选中 full 与 baseline 最终分数接近、收敛更慢，且单 seed `raw_softmax` / `uniform_aggregation` 高于 full；需先修订并预注册聚合假设，再扩大 baseline/消融 seed，当前数据不能支持 full 聚合最优；
 - deployable 主曲线带 archive / rollback，适合衡量最终可部署性能，但可能隐藏聚合 candidate 的瞬时退化；论文必须同时报告 candidate 或明确 checkpoint 规则；
 - actor-only 共享避免 critic scale mismatch，但 client critic 完全本地化，早期本地更新仍可能噪声较大；
 - raw reward softmax 容易受异质 client reward scale 影响；`aggregation_entropy`、`aggregation_score_std` 和 reward-scale stress test 仍需单独分析；

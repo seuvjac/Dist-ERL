@@ -130,10 +130,15 @@ def main():
         seen_roots.add(resolved)
         roots.append(root)
     grouped = defaultdict(list)
+    seen_metrics = set()
     for root in roots:
         if not root.exists():
             continue
         for metrics in root.rglob('metrics.csv'):
+            metrics_key = metrics.resolve()
+            if metrics_key in seen_metrics:
+                continue
+            seen_metrics.add(metrics_key)
             meta_path = metrics.parent / 'metadata.json'
             meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
             env = meta.get('env', 'unknown')

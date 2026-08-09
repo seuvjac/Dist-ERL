@@ -1,10 +1,14 @@
 """Regression tests for paper plotting helpers."""
 
+import csv
+import json
+
 import numpy as np
 
 from scripts.plot_fedrl_heterogeneous import (
     _align_runs_to_first_evaluation,
     _smooth_nan,
+    load_runs,
 )
 
 
@@ -33,3 +37,28 @@ def test_align_runs_only_shifts_x_axis():
     np.testing.assert_array_equal(aligned[0]['y'], run['y'])
     np.testing.assert_array_equal(aligned[0]['y_std'], run['y_std'])
     np.testing.assert_array_equal(run['x'], [120.0, 180.0, 260.0])
+
+
+def test_load_runs_deduplicates_nested_log_roots(tmp_path):
+    run_dir = tmp_path / 'baselines' / 'fedavg_sac_seed0'
+    run_dir.mkdir(parents=True)
+    (run_dir / 'metadata.json').write_text(json.dumps({
+        'env': 'Walker2d-v5',
+        'mode': 'fedavg_sac',
+        'seed': 0,
+    }), encoding='utf-8')
+    with (run_dir / 'metrics.csv').open('w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=[
+            'total_env_steps', 'eval_reward_mean', 'eval_reward_std',
+        ])
+        writer.writeheader()
+        writer.writerow({
+            'total_env_steps': 100,
+            'eval_reward_mean': 12.5,
+            'eval_reward_std': 1.5,
+        })
+
+    runs = load_runs([tmp_path, tmp_path / 'baselines'])
+
+    assert len(runs) == 1
+    assert runs[0]['label'] == 'FedAvg-SAC'

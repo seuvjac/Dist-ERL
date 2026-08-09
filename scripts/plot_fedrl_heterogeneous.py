@@ -131,12 +131,17 @@ def _apply_plot_style(style):
 
 def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current', repeat_ids=None):
     runs = []
+    seen_metrics = set()
     selected_repeats = {str(value) for value in repeat_ids} if repeat_ids else None
     for log_dir in log_dirs:
         root = Path(log_dir)
         if not root.exists():
             continue
         for metrics in sorted(root.rglob('metrics.csv')):
+            metrics_key = metrics.resolve()
+            if metrics_key in seen_metrics:
+                continue
+            seen_metrics.add(metrics_key)
             meta_path = metrics.parent / 'metadata.json'
             meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
             if selected_repeats is not None and str(meta.get('repeat_id', '')) not in selected_repeats:
