@@ -4,7 +4,8 @@
 > `Walker2d-Locomotion` profile 和 `Hopper-v5`，按 20 个 repeat x 2 个独立 seed 组织，共 40 个独立 seed。
 > `fedevosac_formal_20x2_walker_hopper_20260805` 在完成 4 个 repeat 后暂停：Walker2d
 > 出现约 1000 分的存活奖励局部最优。新版 Walker profile 已通过 3-seed locomotion pilot，
-> 小规模横向和消融验证已经完成，当前先筛选聚合策略，再决定是否恢复 40-seed 正式实验；
+> 小规模横向、消融和 3-seed 聚合筛选已经完成；Walker2d-Locomotion 固定使用
+> `batch_zscore` 聚合，正式 20 x 2 held-out-seed 实验可以恢复；
 > 已完成和部分日志保留，新旧任务定义不合并统计。
 
 ## 1. Federated RL 问题设定
@@ -126,8 +127,8 @@ python -m src.main --mode fed_evo_rl --algorithm SAC --env Walker2d-v5
 
 6. **联邦 actor 聚合**
    - server 对 client 上传的 deterministic mean actor update 做 reward-aware aggregation；
-   - 默认使用 normalized relative softmax 权重、低分 client 过滤和 delta norm clipping；
-   - 每个 client 维护本地 reward EMA / std，聚合分数使用相对提升 `(reward_i - EMA_i) / std_i`，避免 reward scale 大的 client 天然支配聚合；
+   - Walker2d-Locomotion 使用当前 batch 内 reward z-score，Hopper 使用 normalized relative-gain softmax；两者都保留低分 client 过滤和 delta norm clipping；
+   - relative-gain 模式为每个 client 维护 reward EMA / std，并使用 `(reward_i - EMA_i) / std_i`；batch-zscore 则只比较同一轮 client，避免短筛选中历史方差过小导致权重塌缩；
    - 聚合时以当前 best actor 为中心聚合 delta，避免直接平均完整 actor 造成大幅漂移。
 
 7. **RL-to-EA soft injection 和 deployable policy**
@@ -214,10 +215,10 @@ FedEvoSAC 聚合的是 client 上传的 actor 参数，不聚合 trajectory，�
 | 机制 | 当前参数 | 作用 |
 |------|----------|------|
 | 聚合周期 | Walker2d / Hopper 分别每 `5 / 4` 代 | 在长 horizon 任务中控制 SAC refinement 与 EA 评估的预算占比 |
-| normalized relative softmax | `--fed-score-normalization relative_gain` | 用 client 相对提升而不是 raw reward 计算聚合权重 |
+| score normalization | Walker2d: `batch_zscore`；Hopper: `relative_gain` | Walker 使用同轮标准化保证早期稳定，Hopper 保留跨轮 client 相对提升 |
 | 温度控制 | Walker2d normalized / raw 为 `8 / 60`，Hopper 为 `1 / 50` | normalized score 与 raw return 分开定温度，避免消融定义互相污染 |
 | score scale | Walker2d / Hopper 分别为 `8 / 1` | 在保持归一化的同时调节 client 权重区分度 |
-| reward scale EMA | `--fed-score-ema-beta 0.90` | 维护每个 client 的 reward baseline / scale |
+| reward scale EMA | `--fed-score-ema-beta 0.90` | 在 Hopper relative-gain 模式维护每个 client 的 reward baseline / scale |
 | federation warm-up | 前两次聚合使用 warm-up score，并跳过 injection | 避免本地 critic 尚未校准时破坏 archive elite |
 | raw softmax 敏感性对照 | `--fed-ablation raw_softmax` | 保留原始 reward softmax，用于单独筛选聚合策略，不进入模块消融图 |
 | 低分过滤 | `--fed-min-client-score-quantile 0.25` | 丢弃低质量 actor update；uniform 消融不执行该过滤 |
@@ -233,7 +234,7 @@ theta_fed = theta_best + sum_i w_i * delta_i
 
 这比直接平均完整 actor 更稳。聚合器直接消费上游明确生成的 raw / batch-zscore / relative-gain score，不再在 `aggregate_weight_dicts()` 内二次 z-score；因此 `fed_score_scale` 和 raw-softmax 的定义均与日志一致。
 
-默认 `FedEvoSAC-full` 使用 normalized relative softmax。`raw_softmax` 与 `uniform_aggregation` 作为聚合敏感性对照保留，用来回答：在 client reward scale 异质时，按相对提升归一化是否比直接用 episodic return 或均匀平均更稳定。它们单独进入 aggregation screening，不进入正式模块消融图。
+正式 `FedEvoSAC-full` 按环境固定 score normalization：Walker2d-Locomotion 使用 `batch_zscore`，Hopper 使用 `relative_gain`。`raw_softmax` 与 `uniform_aggregation` 作为聚合敏感性对照保留，用来回答归一化方式是否比直接用 episodic return 或均匀平均更稳定。它们单独进入 aggregation screening，不进入正式模块消融图。
 
 ## 9. Baseline 和对比曲线
 
@@ -345,7 +346,7 @@ HalfCheetah 和 Swimmer 已从正式主实验中移除。旧 `perenv_tuned_s0` �
 - archive 与 injection 采用跨 client risk-adjusted score 验收，风险惩罚系数为 `0.25`，降低幸运轨迹进入 archive 的概率；
 - `env_params_only` 的扰动只在环境 wrapper 中执行，client 不再重复施加 reward scale/action noise。
 
-Walker2d 的 `relative_gain` 聚合曾经过于接近 uniform averaging，导致 full 消融不能稳定优于 raw-softmax。当前 Walker2d normalized temperature 为 `8`、raw-softmax temperature 为 `60`，并将归一化聚合分数乘以 `fed_score_scale=8.0`；Hopper 分别使用 `1 / 50` 和 score scale `1.0`。raw-softmax 不使用 normalized score scale，仍作为 reward-scale 敏感性的消融对照。
+Walker2d 的历史 `relative_gain` 在早期聚合中出现过 `aggregation_score_std=367` 和 entropy `0`，说明短历史 EMA/std 会让单 client 垄断权重。3-seed 筛选后，Walker2d 改用 `batch_zscore`，normalized temperature 为 `8`，并将分数乘以 `fed_score_scale=8.0`；raw-softmax temperature 仍为 `60`。Hopper 保持 relative-gain，normalized/raw temperature 为 `1 / 50`，score scale 为 `1.0`。
 
 为了降低无意义的 evaluation 方差，同时保留可检验的 FedEvoSAC 消融差异，当前调参版允许每个环境单独设置 client heterogeneity。推荐设置为：
 
@@ -379,7 +380,9 @@ Walker2d 的 `relative_gain` 聚合曾经过于接近 uniform averaging，导致
 | ablation | `no_ea_injection` | `106.98` (`n=1`) |
 | control | `no_heterogeneity` | `139.58` (`n=1`) |
 
-这轮结果验证了 locomotion task 修复，却没有验证当前 normalized-relative-gain 聚合：full 在最终回报上只与四个 baseline 持平，并且约到 220k interactions 才接近其最终水平；四个 baseline 在约 20k--70k 内就取得 130 以上的 deployable checkpoint。`raw_softmax` 和 uniform 单 seed 又明显高于 full，说明仅含 dynamics heterogeneity、没有 reward-scale 扰动时，当前 relative-gain normalization/temperature 可能削弱了有效 client 排序。另一方面，`no_ea_injection` 明显下降，`no_local_rl` 也较低，提示 EA-to-RL injection 与本地 SAC refinement 值得保留并扩大 seed 验证。baseline 的 current 曲线主要由 rollback checkpoint 保持稳定，其 candidate 策略仍多次退化，因此后续必须同时报告 deployable current 和 candidate，而不能只凭平坦主曲线声称训练稳定。正式 40-seed 批次暂不恢复，下一步先针对聚合选择做预注册的多 seed 筛选。
+这轮结果验证了 locomotion task 修复，却没有验证当时的 normalized-relative-gain 聚合：full 在最终回报上只与四个 baseline 持平，并且约到 220k interactions 才接近其最终水平；四个 baseline 在约 20k--70k 内就取得 130 以上的 deployable checkpoint。`raw_softmax` 和 uniform 单 seed 又明显高于 full，说明仅含 dynamics heterogeneity、没有 reward-scale 扰动时，relative-gain normalization/temperature 可能削弱了有效 client 排序。另一方面，`no_ea_injection` 明显下降，`no_local_rl` 也较低，提示 EA-to-RL injection 与本地 SAC refinement 值得保留并扩大 seed 验证。baseline 的 current 曲线主要由 rollback checkpoint 保持稳定，其 candidate 策略仍多次退化，因此后续必须同时报告 deployable current 和 candidate，而不能只凭平坦主曲线声称训练稳定。
+
+随后使用开发 seed `0/1/2`、相同 300k interaction 预算完成聚合筛选：`batch_zscore = 145.34 +/- 1.91`，`relative_gain = 137.40 +/- 1.81`，`raw = 127.43 +/- 18.27`。因此 Walker2d-Locomotion 的正式 Full 预先固定为 batch-zscore；正式 20 x 2 使用不重叠的 seed `3..42`。该选择只决定后续算法配置，正式结论仍来自全部 40 个 held-out seeds，不能按 Full 是否领先筛除 repeat。
 
 正式实验不再包含 Swimmer。新版对两个环境统一采用 actor-mean EA、client-local `log_std`/temperature、local candidate rollback、risk-adjusted archive 验收和低噪声 injection。正式结论必须来自完整 40-seed aggregate；smoke test 只验证调用链，不作为性能证据。
 
@@ -393,6 +396,20 @@ EXPERIMENT_ID=fedevosac_formal_20x2_walker_hopper_20260805 \
 ```
 
 `20x2` 表示 20 个 outer repeat，每个 repeat 恰好两个 seed。不同 repeat 使用不同 seed pair：`(0,1), (2,3), ..., (38,39)`，所以每个 repeat 的图是 `n=2`，目标 aggregate 是 40 个独立 seed；不会把完全相同的 seed 重跑 20 次后伪装成更大的独立样本量。该批次已于 2026-08-06 主动停止，旧 Walker profile 的完成结果不能用 `SKIP_EXISTING` 混入新 profile。
+
+锁定 Walker batch-zscore 后，新版 held-out 正式实验使用：
+
+```bash
+EXPERIMENT_ID=fedevosac_formal_20x2_batchz_20260809 \
+SEED_BASE=3 \
+PARALLEL_REPEATS=2 \
+FED_WALKER2D_SCORE_NORMALIZATION=batch_zscore \
+FED_HOPPER_SCORE_NORMALIZATION=relative_gain \
+PLOT_ROOT=plots/formal_candidates/fedevosac_formal_20x2_batchz_20260809 \
+  ./scripts/run_fedrl_20x2_experiment.sh
+```
+
+20 个 repeat 对应 seed pair `(3,4), (5,6), ..., (41,42)`，与开发 seed `0/1/2` 完全分离。正式目录保存全部结果，不执行 Full-win 过滤；任何 post-hoc 示例图只能放入 diagnostics 并显式标注，不能替代 aggregate。
 
 正式启动使用 `PARALLEL_REPEATS=2`，降低多个 Ray 集群同时运行时的内存和对象存储压力；每个 repeat 的 stdout 独立写入 `logs/experiments/<experiment_id>/repeat_XX.log`，批内任务全部结束后才重画 aggregate。可通过 `START_REPEAT` / `END_REPEAT` 做分片或断点续跑。
 
@@ -586,7 +603,7 @@ logs/experiments/fedevosac_20x2_converged_20260714/
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；
 - GA actor 前缀可配置且当前固定为 `actor.`；
-- normalized relative reward-aware federated actor aggregation；
+- environment-specific normalized reward-aware aggregation：Walker batch-zscore，Hopper relative-gain；
 - delta clipping 与 bounded EA mutation；
 - global elite archive；
 - FedEvoSAC 连续对比和消融脚本；
@@ -599,7 +616,7 @@ logs/experiments/fedevosac_20x2_converged_20260714/
 
 - Swimmer 因历史 seed sensitivity 和不稳定收敛退出正式实验；不得用旧单 seed 高分替代多 seed 结论；
 - Walker2d 的旧统一缩放异质性诱发约 1000 分的存活奖励局部最优；`Walker2d-Locomotion` 使用 gait-structured `0.30` profile、显式 `healthy_reward=0.05` 和 locomotion diagnostics，3-seed pilot 已通过，小规模 baseline/消融复核也已完成；
-- 新筛选中 full 与 baseline 最终分数接近、收敛更慢，且单 seed `raw_softmax` / `uniform_aggregation` 高于 full；需先通过独立 aggregation screening 预注册聚合选择，再扩大 baseline/模块消融 seed，当前数据不能支持 full 聚合最优；
+- Walker 聚合筛选已用三个开发 seed 固定 batch-zscore；正式 held-out 结果仍可能不领先，必须完整报告 40 seeds，不能按 Full 排名挑选 repeat；
 - deployable 主曲线带 archive / rollback，适合衡量最终可部署性能，但可能隐藏聚合 candidate 的瞬时退化；论文必须同时报告 candidate 或明确 checkpoint 规则；
 - actor-only 共享避免 critic scale mismatch，但 client critic 完全本地化，早期本地更新仍可能噪声较大；
 - raw reward softmax 容易受异质 client reward scale 影响；`aggregation_entropy`、`aggregation_score_std` 和 reward-scale stress test 仍需单独分析；
