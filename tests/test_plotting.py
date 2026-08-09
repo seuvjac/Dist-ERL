@@ -7,6 +7,7 @@ import numpy as np
 
 from scripts.plot_fedrl_heterogeneous import (
     _align_runs_to_first_evaluation,
+    _display_env,
     _smooth_nan,
     load_runs,
 )
@@ -62,3 +63,11 @@ def test_load_runs_deduplicates_nested_log_roots(tmp_path):
 
     assert len(runs) == 1
     assert runs[0]['label'] == 'FedAvg-SAC'
+
+
+def test_display_env_marks_custom_walker_reward():
+    assert _display_env({
+        'env': 'Walker2d-v5',
+        'walker_healthy_reward': 0.05,
+        'walker_forward_reward_weight': 1.0,
+    }) == 'Walker2d-Locomotion (healthy=0.05, forward=1)'

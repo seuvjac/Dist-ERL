@@ -56,6 +56,16 @@ def _num(v):
         return np.nan
 
 
+def _display_env(meta):
+    env = meta.get('env', 'unknown')
+    healthy = _num(meta.get('walker_healthy_reward'))
+    forward = _num(meta.get('walker_forward_reward_weight'))
+    if env == 'Walker2d-v5' and np.isfinite(healthy) and np.isfinite(forward):
+        if not np.isclose(healthy, 1.0) or not np.isclose(forward, 1.0):
+            return f'Walker2d-Locomotion (healthy={healthy:g}, forward={forward:g})'
+    return env
+
+
 def _smooth_nan(values, window):
     """Smooth finite spans without inventing values outside their support.
 
@@ -234,6 +244,7 @@ def load_runs(log_dirs, plot_kind='comparison', x_axis='steps', metric='current'
                 label = 'FedAvg-DQN'
             runs.append({
                 'env': meta.get('env', 'unknown'),
+                'display_env': _display_env(meta),
                 'label': label,
                 'seed': meta.get('seed', ''),
                 'x': np.asarray(xs, dtype=float),
@@ -335,6 +346,7 @@ def main():
         env_runs = [r for r in runs if r['env'] == env]
         if not env_runs:
             continue
+        display_env = env_runs[0].get('display_env', env)
         paper_style = args.style == 'paper'
         fig, ax = plt.subplots(figsize=(9.6, 5.8) if paper_style else (10, 6))
         if args.style in ('reference', 'paper'):
@@ -435,11 +447,11 @@ def main():
                 zorder=4 if is_proposed else 3,
             )
         if paper_style:
-            title = env
+            title = display_env
         elif args.plot_kind == 'ablation':
-            title = f'{env}: FedEvoSAC ablations'
+            title = f'{display_env}: FedEvoSAC ablations'
         else:
-            title = f'{env}: FedEvoSAC vs FedRL baselines'
+            title = f'{display_env}: FedEvoSAC vs FedRL baselines'
         ax.set_title(title, loc='left' if paper_style else 'center', pad=10)
         if paper_style and args.x_axis == 'steps':
             xlabel = 'Environment interactions ($10^6$)'
@@ -456,7 +468,12 @@ def main():
         else:
             xlabel = 'Environment steps'
         ax.set_xlabel(xlabel)
-        ylabel = 'Average evaluation return' if args.metric == 'current' else 'Best evaluation score'
+        if args.metric == 'current':
+            ylabel = 'Average evaluation return'
+        elif args.metric == 'candidate':
+            ylabel = 'Candidate evaluation return'
+        else:
+            ylabel = 'Best evaluation score'
         ax.set_ylabel(ylabel)
         if paper_style:
             ax.grid(axis='y', color='#d7dbe6', linewidth=0.85, alpha=0.8)
