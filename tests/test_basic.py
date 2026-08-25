@@ -162,6 +162,27 @@ def test_baseline_walker_rollout_uses_locomotion_reward_profile():
     assert np.isfinite(diagnostics['x_velocity_mean'])
 
 
+def test_hopper_locomotion_profile_removes_survival_reward_shortcut():
+    info = get_env_info('Hopper-v5')
+    policy = SACPolicy(info['state_dim'], info['action_dim'])
+    _, _, steps, diagnostics = baseline_rollout(
+        policy,
+        'Hopper-v5',
+        max_steps=25,
+        seed=103,
+        client_id=1,
+        heterogeneity=0.25,
+        heterogeneity_mode='env_params_only',
+        train=False,
+        env_kwargs={'healthy_reward': 0.05, 'forward_reward_weight': 1.0},
+    )
+    assert 0 < steps <= 25
+    assert diagnostics['episode_length_mean'] == steps
+    assert diagnostics['survive_return_mean'] <= 0.05 * steps + 1e-6
+    assert np.isfinite(diagnostics['forward_return_mean'])
+    assert np.isfinite(diagnostics['x_velocity_mean'])
+
+
 def test_ea_manager():
     ray.init(ignore_reinit_error=True, num_cpus=1)
     info = get_env_info('Pendulum-v1')

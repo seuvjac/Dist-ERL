@@ -136,6 +136,8 @@ PY
   MIGRATION_BLEND="$FED_MIGRATION_BLEND"
   WALKER_HEALTHY_REWARD=1.0
   WALKER_FORWARD_REWARD_WEIGHT=1.0
+  HOPPER_HEALTHY_REWARD=1.0
+  HOPPER_FORWARD_REWARD_WEIGHT=1.0
   THIS_BASELINE_UPDATE_TO_DATA_RATIO="$BASELINE_UPDATE_TO_DATA_RATIO"
   THIS_BASELINE_MAX_UPDATES_PER_ROUND="$BASELINE_MAX_UPDATES_PER_ROUND"
   THIS_BASELINE_BASE_UPDATES="$BASELINE_BASE_UPDATES"
@@ -278,6 +280,8 @@ PY
       STAGNATION_BOOST_COOLDOWN=${FED_HOPPER_STAGNATION_BOOST_COOLDOWN:-12}
       ENV_CLIENT_HETEROGENEITY=${FED_HOPPER_CLIENT_HETEROGENEITY:-0.25}
       ENV_CLIENT_HETEROGENEITY_MODE=${FED_HOPPER_CLIENT_HETEROGENEITY_MODE:-env_params_only}
+      HOPPER_HEALTHY_REWARD=${FED_HOPPER_HEALTHY_REWARD:-0.05}
+      HOPPER_FORWARD_REWARD_WEIGHT=${FED_HOPPER_FORWARD_REWARD_WEIGHT:-1.0}
       ;;
     Walker2d-v5)
       POP=${FED_WALKER2D_POPULATION_SIZE:-13}
@@ -387,6 +391,8 @@ PY
         --client-heterogeneity-mode "$ENV_CLIENT_HETEROGENEITY_MODE" \
         --walker-healthy-reward "$WALKER_HEALTHY_REWARD" \
         --walker-forward-reward-weight "$WALKER_FORWARD_REWARD_WEIGHT" \
+        --hopper-healthy-reward "$HOPPER_HEALTHY_REWARD" \
+        --hopper-forward-reward-weight "$HOPPER_FORWARD_REWARD_WEIGHT" \
         --fed-aggregation softmax \
         --fed-aggregation-interval "$FED_AGG_INTERVAL" \
         --fed-aggregation-temperature "$AGGREGATION_TEMPERATURE" \
@@ -466,6 +472,8 @@ PY
         --client-heterogeneity-mode "$ENV_CLIENT_HETEROGENEITY_MODE" \
         --walker-healthy-reward "$WALKER_HEALTHY_REWARD" \
         --walker-forward-reward-weight "$WALKER_FORWARD_REWARD_WEIGHT" \
+        --hopper-healthy-reward "$HOPPER_HEALTHY_REWARD" \
+        --hopper-forward-reward-weight "$HOPPER_FORWARD_REWARD_WEIGHT" \
         --log-dir "$SAC_LOG_DIR" \
         --exp-name "$EXP" \
         --baseline-mode "$MODE"

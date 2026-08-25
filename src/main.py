@@ -148,6 +148,10 @@ def parse_args():
                         help='Explicit Walker2d healthy reward; 1.0 is Gymnasium default')
     parser.add_argument('--walker-forward-reward-weight', type=float, default=1.0,
                         help='Explicit Walker2d forward reward weight')
+    parser.add_argument('--hopper-healthy-reward', type=float, default=1.0,
+                        help='Explicit Hopper healthy reward; 1.0 is Gymnasium default')
+    parser.add_argument('--hopper-forward-reward-weight', type=float, default=1.0,
+                        help='Explicit Hopper forward reward weight')
     parser.add_argument('--fed-aggregation', type=str, default='softmax',
                         choices=['fitness', 'uniform', 'softmax'],
                         help='Federated aggregation rule for client model uploads')
@@ -321,6 +325,8 @@ def _setup_local_logger(args):
         'client_heterogeneity_mode': args.client_heterogeneity_mode,
         'walker_healthy_reward': args.walker_healthy_reward,
         'walker_forward_reward_weight': args.walker_forward_reward_weight,
+        'hopper_healthy_reward': args.hopper_healthy_reward,
+        'hopper_forward_reward_weight': args.hopper_forward_reward_weight,
         'fed_aggregation': args.fed_aggregation,
         'fed_aggregation_interval': args.fed_aggregation_interval,
         'fed_aggregation_temperature': args.fed_aggregation_temperature,
@@ -527,6 +533,11 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         env_kwargs = {
             'healthy_reward': float(args.walker_healthy_reward),
             'forward_reward_weight': float(args.walker_forward_reward_weight),
+        }
+    elif args.env == 'Hopper-v5':
+        env_kwargs = {
+            'healthy_reward': float(args.hopper_healthy_reward),
+            'forward_reward_weight': float(args.hopper_forward_reward_weight),
         }
     clients = [
         FederatedClient.remote(

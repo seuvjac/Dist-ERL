@@ -107,6 +107,11 @@ def _run_values(metrics_path):
                 'wall_time_sec': _num(row.get('total_time')),
                 'current': current,
                 'best': max(best_vals) if best_vals else current,
+                'forward_return': _num(row.get('eval_forward_return_mean')),
+                'survive_return': _num(row.get('eval_survive_return_mean')),
+                'episode_length': _num(row.get('eval_episode_length_mean')),
+                'x_displacement': _num(row.get('eval_x_displacement_mean')),
+                'x_velocity': _num(row.get('eval_x_velocity_mean')),
             })
     if not rows:
         return None
@@ -168,6 +173,11 @@ def main():
         'env', 'method', 'n',
         'final_current_mean', 'final_current_std', 'final_current',
         'final_best_mean', 'final_best_std', 'final_best',
+        'final_forward_return_mean', 'final_forward_return_std',
+        'final_survive_return_mean', 'final_survive_return_std',
+        'final_episode_length_mean', 'final_episode_length_std',
+        'final_x_displacement_mean', 'final_x_displacement_std',
+        'final_x_velocity_mean', 'final_x_velocity_std',
         'max_steps', 'max_round', 'max_wall_time_sec', 'wall_time_sec',
     ]
     with out_path.open('w', newline='', encoding='utf-8') as f:
@@ -176,6 +186,13 @@ def main():
         for (env, method), vals in sorted(grouped.items()):
             currents = np.asarray([v['current'] for v in vals], dtype=float)
             bests = np.asarray([v['best'] for v in vals], dtype=float)
+            diagnostics = {
+                key: np.asarray([v[key] for v in vals], dtype=float)
+                for key in (
+                    'forward_return', 'survive_return', 'episode_length',
+                    'x_displacement', 'x_velocity',
+                )
+            }
             steps = np.asarray([v['steps'] for v in vals], dtype=float)
             rounds = np.asarray([v['generation'] for v in vals], dtype=float)
             wall_times = np.asarray([v['wall_time_sec'] for v in vals], dtype=float)
@@ -197,6 +214,10 @@ def main():
                 'max_wall_time_sec': float(np.nanmax(wall_times)),
                 'wall_time_sec': _fmt(float(np.nanmean(wall_times)), wall_time_std),
             }
+            for key, values in diagnostics.items():
+                finite = values[np.isfinite(values)]
+                row[f'final_{key}_mean'] = float(np.mean(finite)) if finite.size else float('nan')
+                row[f'final_{key}_std'] = _sample_std(finite) if finite.size else float('nan')
             writer.writerow(row)
     print(out_path)
 

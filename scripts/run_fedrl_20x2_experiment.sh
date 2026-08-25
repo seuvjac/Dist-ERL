@@ -48,6 +48,7 @@ printf '%s\n' \
   'Each outer repeat contains exactly two independent seeds.' \
   'Seed pairs are unique across repeats, so the aggregate result contains 40 independent seeds.' \
   'The formal environment matrix is Walker2d-v5 and Hopper-v5; Swimmer is excluded.' \
+  'Both locomotion tasks use healthy_reward=0.05 and forward_reward_weight=1.0; default-reward logs must not be pooled.' \
   'Legacy single-seed references are disabled by default and are always excluded from statistics.' \
   'Each environment renders three comparison views plus one separate ablation view (8 individual figures total).' \
   'Main evidence: current return vs communication rounds since first evaluation, with 90% CI.' \

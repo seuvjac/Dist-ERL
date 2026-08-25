@@ -70,7 +70,17 @@ def test_display_env_marks_custom_walker_reward():
         'env': 'Walker2d-v5',
         'walker_healthy_reward': 0.05,
         'walker_forward_reward_weight': 1.0,
+        'hopper_healthy_reward': 0.05,
+        'hopper_forward_reward_weight': 1.0,
     }) == 'Walker2d-Locomotion (healthy=0.05, forward=1)'
+
+
+def test_display_env_marks_custom_hopper_reward():
+    assert _display_env({
+        'env': 'Hopper-v5',
+        'hopper_healthy_reward': 0.05,
+        'hopper_forward_reward_weight': 1.0,
+    }) == 'Hopper-Locomotion (healthy=0.05, forward=1)'
 
 
 def test_aggregation_plot_labels_score_mode(tmp_path):

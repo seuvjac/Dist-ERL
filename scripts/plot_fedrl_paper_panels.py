@@ -143,7 +143,7 @@ def main():
                 label=label, zorder=4 if is_proposed else 3,
             )
             handles[label] = line
-        ax.set_title(env, loc='left', pad=10)
+        ax.set_title(env_runs[0].get('display_env', env), loc='left', pad=10)
         if args.x_axis == 'steps':
             ax.set_xlabel('Environment interactions ($10^6$)')
             ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f'{value / 1e6:g}'))

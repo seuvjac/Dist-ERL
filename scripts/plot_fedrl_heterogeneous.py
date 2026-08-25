@@ -58,11 +58,18 @@ def _num(v):
 
 def _display_env(meta):
     env = meta.get('env', 'unknown')
-    healthy = _num(meta.get('walker_healthy_reward'))
-    forward = _num(meta.get('walker_forward_reward_weight'))
-    if env == 'Walker2d-v5' and np.isfinite(healthy) and np.isfinite(forward):
+    walker_healthy = _num(meta.get('walker_healthy_reward'))
+    walker_forward = _num(meta.get('walker_forward_reward_weight'))
+    if env == 'Walker2d-v5' and np.isfinite(walker_healthy) and np.isfinite(walker_forward):
+        healthy, forward = walker_healthy, walker_forward
         if not np.isclose(healthy, 1.0) or not np.isclose(forward, 1.0):
             return f'Walker2d-Locomotion (healthy={healthy:g}, forward={forward:g})'
+    hopper_healthy = _num(meta.get('hopper_healthy_reward'))
+    hopper_forward = _num(meta.get('hopper_forward_reward_weight'))
+    if env == 'Hopper-v5' and np.isfinite(hopper_healthy) and np.isfinite(hopper_forward):
+        healthy, forward = hopper_healthy, hopper_forward
+        if not np.isclose(healthy, 1.0) or not np.isclose(forward, 1.0):
+            return f'Hopper-Locomotion (healthy={healthy:g}, forward={forward:g})'
     return env
 
 

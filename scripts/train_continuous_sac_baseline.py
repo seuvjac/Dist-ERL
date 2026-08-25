@@ -52,6 +52,8 @@ def parse_args():
                             'reward_scale_only', 'env_params_reward_scale'])
     p.add_argument('--walker-healthy-reward', type=float, default=1.0)
     p.add_argument('--walker-forward-reward-weight', type=float, default=1.0)
+    p.add_argument('--hopper-healthy-reward', type=float, default=1.0)
+    p.add_argument('--hopper-forward-reward-weight', type=float, default=1.0)
     p.add_argument('--eval-interval', type=int, default=5)
     p.add_argument('--eval-episodes', type=int, default=3)
     p.add_argument('--log-dir', default='logs/logs_sac_continuous')
@@ -263,6 +265,11 @@ def main():
         env_kwargs = {
             'healthy_reward': float(args.walker_healthy_reward),
             'forward_reward_weight': float(args.walker_forward_reward_weight),
+        }
+    elif args.env == 'Hopper-v5':
+        env_kwargs = {
+            'healthy_reward': float(args.hopper_healthy_reward),
+            'forward_reward_weight': float(args.hopper_forward_reward_weight),
         }
     global_eval, global_eval_std, initial_eval_steps, global_diagnostics = _evaluate(
         policies, args.env, args.max_episode_steps, args.seed + 70_000_003,
