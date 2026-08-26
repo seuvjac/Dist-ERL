@@ -68,6 +68,7 @@ METRIC_FIELDS = [
     'aggregation_temperature', 'deployment_rollback', 'deployment_rollback_count',
     'candidate_eval_mean', 'candidate_eval_std', 'local_updates_per_worker',
     'local_candidate_accept_rate', 'local_candidate_gain_mean',
+    'accepted_client_uploads', 'injection_reference_score',
     'stagnation_boost_count',
     'eval_episode_length_mean', 'eval_forward_return_mean',
     'eval_survive_return_mean', 'eval_ctrl_return_mean',
@@ -417,6 +418,20 @@ def _mean_evaluation_diagnostics(results):
     }
 
 
+def _accepted_client_uploads(client_indices, train_results):
+    """Return only locally validated actor updates for server aggregation."""
+    accepted = [
+        (int(idx), result)
+        for idx, result in zip(client_indices, train_results)
+        if int(result.get('candidate_accepted', 1)) == 1
+    ]
+    return (
+        [idx for idx, _ in accepted],
+        [result.get('upload_score', result['avg_reward']) for _, result in accepted],
+        [result['weights'] for _, result in accepted],
+    )
+
+
 def _apply_fed_ablation_args(args) -> None:
     """Translate named FedEvoRL ablations into concrete CLI settings."""
     if args.mode != FED_EVO_RL:
@@ -628,6 +643,7 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             })
         ray.get(manager.update_elite_archive_evaluated.remote(
             archive_rows, args.elite_archive_size, args.archive_std_penalty))
+        archive_stats_before_fed = ray.get(manager.get_archive_stats.remote())
         ray.get(manager.evolve_population.remote())
         ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))
 
@@ -658,14 +674,16 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             ]
             train_results = ray.get(train_refs)
         client_rewards = [r.get('upload_score', r['avg_reward']) for r in train_results]
-        client_weights = [r['weights'] for r in train_results]
+        aggregation_client_indices, aggregation_rewards, client_weights = (
+            _accepted_client_uploads(client_indices, train_results)
+        )
         aggregation_round_index = fed_aggregation_count if fed_round_applied else -1
         aggregation_score_mode = args.fed_score_normalization
         if fed_round_applied and fed_aggregation_count < max(0, args.fed_score_warmup_rounds):
             aggregation_score_mode = args.fed_score_warmup_normalization
         aggregation_scores = _aggregation_scores_from_rewards(
-            client_indices,
-            client_rewards,
+            aggregation_client_indices,
+            aggregation_rewards,
             client_reward_ema,
             client_reward_var,
             client_reward_seen,
@@ -673,8 +691,8 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             args.fed_score_ema_beta,
             args.fed_score_min_std,
             args.fed_score_scale,
-        ) if client_rewards else []
-        if client_rewards:
+        ) if aggregation_rewards else []
+        if aggregation_rewards:
             # A uniform/FedAvg ablation must include every selected client.
             # Score-based filtering here would silently turn it into a
             # trimmed average and invalidate the intended comparison.
@@ -717,7 +735,13 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             scores = [float(result['fitness']) for result in results]
             aggregated_eval_mean = float(np.mean(scores))
             aggregated_eval_std = float(np.std(scores))
-        inject_threshold = current_best + abs(current_best) * args.fed_inject_margin
+        injection_reference_score = float(
+            archive_stats_before_fed.get('archive_best_score', current_best)
+        )
+        inject_threshold = (
+            injection_reference_score
+            + abs(injection_reference_score) * args.fed_inject_margin
+        )
         aggregated_eval_score = (
             aggregated_eval_mean
             - max(0.0, args.fed_inject_std_penalty) * aggregated_eval_std
@@ -868,6 +892,8 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
                 float(np.mean([r.get('candidate_validation_gain', 0.0) for r in train_results]))
                 if train_results else 0.0
             ),
+            'accepted_client_uploads': len(aggregation_rewards),
+            'injection_reference_score': injection_reference_score,
             'stagnation_boost': stagnation_boost,
             'stagnation_boost_count': stagnation_boost_count,
             'eval_episode_length_mean': stats.get(

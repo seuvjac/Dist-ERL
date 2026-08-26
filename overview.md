@@ -4,7 +4,9 @@
 > 默认 Hopper reward 的 survival shortcut：Full 的 `932.25 +/- 184.81` 主要来自约 `906`
 > 分存活奖励，平均前进速度只有 `0.049`。因此 Hopper 消融已切换到显式
 > `Hopper-Locomotion (healthy_reward=0.05, forward_reward_weight=1.0)`；旧默认 reward
-> 数据继续保留用于审计，但不能与新版任务合并统计或作为 locomotion 优势证据。
+> 数据继续保留用于审计，但不能与新版任务合并统计或作为 locomotion 优势证据。首轮
+> 3-seed 消融进一步暴露出被拒绝的 client actor 仍参与聚合以及注入门槛评估口径不一致，
+> `2026-08-26` 已修复并启动第二版验证。
 
 ## 1. Federated RL 问题设定
 
@@ -339,7 +341,7 @@ HalfCheetah 和 Swimmer 已从正式主实验中移除。旧 `perenv_tuned_s0` �
 - `EAManager` 和每个 Ray `FederatedClient` 显式接收实验 seed；manager 持有私有 Python/NumPy RNG，并将其传入每一代交叉、变异、immigrant 和 injection，避免 `erl_re2_epoch()` 每代临时创建未受控随机源；
 - EA population 使用 `anchor_antithetic`：一个个体保持标准 SAC anchor，其余个体围绕 anchor 做成对的 `+delta/-delta` 层尺度扰动；`log_std` 不扰动。population 固定为 `13`，由一个 anchor 和六对 antithetic 个体组成；
 - archive 连续若干代未达到最小增益时，保留 archive elite，并围绕 archive elite 对底部个体做受控增强变异，不再重新生成整网高斯随机 actor；最多 boost `2` 次，两次至少间隔 `12` 代；
-- Hopper 每 client 执行 `64` 次本地 SAC 更新，其中前 `32` 次 critic-only warm-up，actor learning rate 为 `1e-4`；Walker locomotion pilot 提高为 `256 / 192 / 3e-5`，让 critic 在长 horizon 数据上先校准，再以较小 actor learning rate 更新；前两次聚合均跳过 injection；
+- Hopper 每 client 执行 `96` 次本地 SAC 更新，其中前 `88` 次 critic-only warm-up，actor learning rate 为 `3e-5`；Walker locomotion pilot 使用 `256 / 192 / 3e-5`。两者都先校准 critic，再以较小 actor learning rate 更新；前两次聚合均跳过 injection；
 - 每个 client 在上传前对 base/local actor 做 common-seed deterministic validation；local actor 低于 base 时上传 base actor，并记录 `local_candidate_accept_rate` 与 `local_candidate_gain_mean`；
 - archive 与 injection 采用跨 client risk-adjusted score 验收，风险惩罚系数为 `0.25`，降低幸运轨迹进入 archive 的概率；
 - `env_params_only` 的扰动只在环境 wrapper 中执行，client 不再重复施加 reward scale/action noise。
@@ -362,6 +364,10 @@ Walker2d 的 `relative_gain` 在早期聚合中出现过 `aggregation_score_std=
 当前第三版 `Walker2d-Locomotion` 将 `healthy_reward` 进一步降为 `0.05`，使站满 1000 步最多只获得 `50` 分 healthy reward。对第二版轨迹的离线重算显示，seed 0 第 7 代的正向策略约为 `124.9` 分，而后来的站立策略约为 `24.7` 分，因此 archive 不应再用站立策略淘汰行走策略。它仍使用 Gymnasium 官方 Walker2d 参数接口，但属于新的任务定义；论文、图题、表格和 metadata 必须写明两个 reward 参数，不能简称为标准 `Walker2d-v5`，也不能与旧默认 reward 或 `0.2` 数据合并。所有 FedEvoSAC、baseline 和消融方法使用完全相同的任务参数与异质 client validation suite，因此该修改用于消除共同的生存奖励捷径，不给主算法单独加分。
 
 Hopper 正式 40-seed 旧协议也出现同类问题：Full 的最终总回报为 `932.25 +/- 184.81`，其中平均 `906.25` 来自存活、只有 `26.65` 来自前进；平均速度为 `0.049`。三个消融的高分同样主要来自站立，而且 Full 反而显著低于 `no_ea_injection`、`no_local_rl` 和 `no_heterogeneity`。因此旧 Hopper 消融结论作废。新版 `Hopper-Locomotion` 与 Walker 一样使用 `healthy_reward=0.05`、`forward_reward_weight=1.0`，站满 1000 步最多获得约 50 分存活奖励；主表必须同时报告 total return、forward return、episode length、x displacement 和 x velocity。Full 与所有消融共享完全相同的任务参数，旧默认 reward 数据不得拼接进新曲线。
+
+第一版 `fedevosac_hopper_locomotion_ablation_pilot_20260825` 使用 seed `0/1/2` 和 300k counted interactions。Full 为 `135.49 +/- 13.87`、平均速度 `1.120 +/- 0.190`，证明 survival shortcut 已消除；但 `no_ea_injection=151.02 +/- 18.49`、`no_local_rl=150.80 +/- 18.63`，Full 没有形成模块优势。诊断显示被本地 validation 拒绝的 client 会上传原 server actor，聚合后得到与 EA elite 相同的候选；旧逻辑仍可能把它计作 RL injection 并对弱个体加噪。注入门槛又把 archive-seed 上的 candidate risk score 与 generation-seed 上的 current fitness 比较，放行标准不一致。
+
+第二版只修正这一数据流，不改变环境、EA 结构和交互预算：服务器仅聚合 `candidate_accepted=1` 的真实本地更新；没有通过验证的 client 时跳过聚合和注入；candidate 必须在相同 archive validation seeds 上比 risk-adjusted archive score 至少高 `1%`；Hopper 每次只迁移 `1` 个弱个体，blend/noise 降为 `0.25/0.002`；本地 SAC 使用 `96/88/3e-5` 和 2-episode common-seed validation。新增 `accepted_client_uploads` 与 `injection_reference_score` 用于审计，避免把原 actor 回传误记为 EA+RL 贡献。
 
 `fedevosac_walker_locomotion_v3_pilot_3seed_20260806` 使用 seed `0/1/2` 和约 300k counted interactions。最终回报为 `135.31 / 138.37 / 138.53`，即 `137.40 +/- 1.81`；`x_velocity` 为 `0.564 / 0.552 / 0.542`，即 `0.553 +/- 0.011`；`x_displacement` 为 `1.003 +/- 0.008`。相比第二版 `x_velocity=0.474 +/- 0.431`，第三版消除了本次三个 seed 中的站立策略，并显著降低步态方差。
 

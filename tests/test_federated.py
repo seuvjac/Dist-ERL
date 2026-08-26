@@ -9,7 +9,11 @@ from src.config import (
     FED_ABLATION_RAW_SOFTMAX,
     FED_EVO_RL,
 )
-from src.main import _aggregation_scores_from_rewards, _apply_fed_ablation_args
+from src.main import (
+    _accepted_client_uploads,
+    _aggregation_scores_from_rewards,
+    _apply_fed_ablation_args,
+)
 
 
 def test_fitness_weighted_aggregation_prefers_better_client():
@@ -67,6 +71,25 @@ def test_normalized_score_scale_does_not_change_raw_ablation():
 
     assert np.allclose(scaled, 4.0 * base)
     assert np.allclose(raw, rewards)
+
+
+def test_rejected_local_actor_is_not_aggregated_as_a_server_update():
+    indices = np.asarray([0, 1, 2])
+    results = [
+        {'candidate_accepted': 0, 'upload_score': 10.0, 'avg_reward': 1.0,
+         'weights': {'actor.weight': np.asarray([0.0])}},
+        {'candidate_accepted': 1, 'upload_score': 12.0, 'avg_reward': 2.0,
+         'weights': {'actor.weight': np.asarray([1.0])}},
+        {'candidate_accepted': 0, 'upload_score': 11.0, 'avg_reward': 3.0,
+         'weights': {'actor.weight': np.asarray([2.0])}},
+    ]
+
+    accepted_indices, rewards, weights = _accepted_client_uploads(indices, results)
+
+    assert accepted_indices == [1]
+    assert rewards == [12.0]
+    assert len(weights) == 1
+    assert weights[0]['actor.weight'][0] == 1.0
 
 
 def test_no_local_rl_is_a_pure_ea_ablation():
