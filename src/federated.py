@@ -68,25 +68,40 @@ def aggregate_weight_dicts(
     score_arr = np.asarray(filtered_scores, dtype=np.float64)
     coeffs = _aggregation_weights(score_arr, mode=mode, temperature=temperature)
     keys = sorted(set.intersection(*(set(w.keys()) for w in filtered_weights)))
+    centers = {}
+    client_deltas = []
+    client_scales = []
+    for weights in filtered_weights:
+        deltas = {}
+        norm_sq = 0.0
+        for key in keys:
+            base = filtered_weights[0][key]
+            center = (
+                base_weights[key].astype(np.float64)
+                if base_weights is not None
+                and key in base_weights
+                and base_weights[key].shape == base.shape
+                else np.zeros_like(base, dtype=np.float64)
+            )
+            centers[key] = center
+            delta = weights[key].astype(np.float64) - center
+            deltas[key] = delta
+            norm_sq += float(np.sum(delta * delta))
+        norm = float(np.sqrt(norm_sq))
+        scale = 1.0
+        if delta_clip_norm is not None and delta_clip_norm > 0 and norm > delta_clip_norm:
+            scale = float(delta_clip_norm) / (norm + 1e-8)
+        client_deltas.append(deltas)
+        client_scales.append(scale)
+
     aggregated: Dict[str, np.ndarray] = {}
     for key in keys:
-        base = filtered_weights[0][key]
-        if base_weights is not None and key in base_weights and base_weights[key].shape == base.shape:
-            center = base_weights[key].astype(np.float64)
-        else:
-            center = np.zeros_like(base, dtype=np.float64)
-        acc_delta = np.zeros_like(base, dtype=np.float64)
-        for coeff, weights in zip(coeffs, filtered_weights):
-            arr = weights[key]
-            if arr.shape != base.shape:
-                continue
-            delta = arr.astype(np.float64) - center
-            if delta_clip_norm is not None and delta_clip_norm > 0:
-                norm = float(np.linalg.norm(delta))
-                if norm > delta_clip_norm:
-                    delta = delta * (float(delta_clip_norm) / (norm + 1e-8))
-            acc_delta += float(coeff) * delta
-        aggregated[key] = (center + acc_delta).astype(base.dtype)
+        acc_delta = np.zeros_like(centers[key], dtype=np.float64)
+        for coeff, deltas, scale in zip(coeffs, client_deltas, client_scales):
+            acc_delta += float(coeff) * float(scale) * deltas[key]
+        aggregated[key] = (
+            centers[key] + acc_delta
+        ).astype(filtered_weights[0][key].dtype)
     return aggregated
 
 
@@ -96,6 +111,24 @@ def weight_entropy(scores: Sequence[float], mode: str = 'fitness', temperature: 
         return 0.0
     coeffs = np.clip(coeffs, 1e-12, 1.0)
     return float(-(coeffs * np.log(coeffs)).sum())
+
+
+def blend_actor_update(
+    base_weights: Dict[str, np.ndarray],
+    candidate_weights: Dict[str, np.ndarray],
+    blend: float,
+) -> Dict[str, np.ndarray]:
+    """Apply a FedProx-style trust region to a client actor upload."""
+    blend = float(np.clip(blend, 0.0, 1.0))
+    blended = {}
+    for key, value in candidate_weights.items():
+        if key in base_weights and base_weights[key].shape == value.shape:
+            base = base_weights[key].astype(np.float64)
+            update = value.astype(np.float64) - base
+            blended[key] = (base + blend * update).astype(value.dtype)
+        else:
+            blended[key] = np.array(value, copy=True)
+    return blended
 
 
 @ray.remote(num_gpus=0)
@@ -319,6 +352,7 @@ class FederatedClient:
         validation_episodes: int = 0,
         rollback_margin: float = 0.0,
         preserve_sac_log_std: bool = False,
+        upload_blend: float = 1.0,
     ) -> Dict[str, Any]:
         if seed is not None:
             local_seed = int(seed + self.seed_offset)
@@ -407,6 +441,13 @@ class FederatedClient:
         env.close()
         candidate_weights = self._export_weights(
             exclude_sac_log_std=preserve_sac_log_std)
+        candidate_weights = blend_actor_update(
+            weights, candidate_weights, upload_blend)
+        candidate_delta_norm = float(np.sqrt(sum(
+            np.sum((value.astype(np.float64) - weights[key].astype(np.float64)) ** 2)
+            for key, value in candidate_weights.items()
+            if key in weights and weights[key].shape == value.shape
+        )))
         uploaded_weights = candidate_weights
         candidate_accepted = True
         base_validation_score = float('nan')
@@ -474,6 +515,7 @@ class FederatedClient:
                 and np.isfinite(candidate_validation_score)
                 else 0.0
             ),
+            'candidate_delta_norm': candidate_delta_norm,
             'validation_steps': int(validation_steps),
             'total_steps': int(total_steps),
             'training_steps': int(self.training_steps),

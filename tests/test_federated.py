@@ -3,7 +3,7 @@
 import numpy as np
 from types import SimpleNamespace
 
-from src.federated import aggregate_weight_dicts, weight_entropy
+from src.federated import aggregate_weight_dicts, blend_actor_update, weight_entropy
 from src.config import (
     FED_ABLATION_NO_LOCAL_RL,
     FED_ABLATION_RAW_SOFTMAX,
@@ -46,6 +46,35 @@ def test_softmax_preserves_explicit_score_scale():
         client_weights, scores=[0.0, 4.0], mode='softmax', temperature=1.0)
     assert high_pressure['actor.0.weight'][0] > low_pressure['actor.0.weight'][0]
     assert high_pressure['actor.0.weight'][0] > 1.9
+
+
+def test_delta_clip_applies_to_whole_client_update():
+    client = {
+        'actor.a': np.asarray([1.0], dtype=np.float32),
+        'actor.b': np.asarray([1.0], dtype=np.float32),
+    }
+    base = {
+        'actor.a': np.asarray([0.0], dtype=np.float32),
+        'actor.b': np.asarray([0.0], dtype=np.float32),
+    }
+
+    aggregated = aggregate_weight_dicts(
+        [client], [1.0], mode='uniform', base_weights=base, delta_clip_norm=1.0)
+
+    expected = 1.0 / np.sqrt(2.0)
+    assert np.allclose(aggregated['actor.a'], expected)
+    assert np.allclose(aggregated['actor.b'], expected)
+    combined_norm = np.sqrt(sum(float(value[0] ** 2) for value in aggregated.values()))
+    assert np.isclose(combined_norm, 1.0)
+
+
+def test_client_upload_blend_limits_local_actor_drift():
+    base = {'actor.weight': np.asarray([0.0, 2.0], dtype=np.float32)}
+    candidate = {'actor.weight': np.asarray([2.0, -2.0], dtype=np.float32)}
+
+    blended = blend_actor_update(base, candidate, 0.25)
+
+    assert np.allclose(blended['actor.weight'], [0.5, 1.0])
 
 
 def test_normalized_score_scale_does_not_change_raw_ablation():

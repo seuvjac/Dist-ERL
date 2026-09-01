@@ -369,6 +369,10 @@ Hopper 正式 40-seed 旧协议也出现同类问题：Full 的最终总回报�
 
 第二版只修正这一数据流，不改变环境、EA 结构和交互预算：服务器仅聚合 `candidate_accepted=1` 的真实本地更新；没有通过验证的 client 时跳过聚合和注入；candidate 必须在相同 archive validation seeds 上比 risk-adjusted archive score 至少高 `1%`；Hopper 每次只迁移 `1` 个弱个体，blend/noise 降为 `0.25/0.002`；本地 SAC 使用 `96/88/3e-5` 和 2-episode common-seed validation。新增 `accepted_client_uploads` 与 `injection_reference_score` 用于审计，避免把原 actor 回传误记为 EA+RL 贡献。
 
+第二版最终为 Full `151.22 +/- 18.27`、`no_ea_injection=151.02 +/- 18.49`、`no_local_rl=150.80 +/- 18.63`，三条曲线基本重合，且三个 seed 合计只有一次真实迁移。继续审计发现联邦本地训练从 generation-common-seed 的当前最高个体出发，而 deployable 主曲线和注入门槛来自 archive-validation-seed 的 archive 最优；两个 actor 可能不同。这会出现“本地 candidate 相对其起点改善，但仍远低于 deployable archive”的口径错位。
+
+第三版将 FedSAC 起点固定为 independently validated archive actor，并把 client delta clipping 修正为整模型全局 L2 norm，而不是逐张量分别裁剪；Hopper 使用 `global_delta_clip_norm=0.5`。前 4 个联邦轮只更新 critic，之后 client upload 使用 `0.15` trust-region blend；client validation 允许相对 base 最多 `3%` 的候选进入服务器候选池，但最终注入仍必须在全客户端 archive validation 上不低于现有 risk-adjusted archive。候选池同时比较 relative-gain softmax actor 与各 accepted client actor，吸收 FedSoftmax 和 FedBest 的优点。无真实参数变化时禁止迁移，避免把 archive 原 actor 加噪后误记为 RL 贡献。新增 `accepted_delta_norm_mean/max`、`candidate_pool_size/source` 记录实际更新幅度和候选来源。
+
 `fedevosac_walker_locomotion_v3_pilot_3seed_20260806` 使用 seed `0/1/2` 和约 300k counted interactions。最终回报为 `135.31 / 138.37 / 138.53`，即 `137.40 +/- 1.81`；`x_velocity` 为 `0.564 / 0.552 / 0.542`，即 `0.553 +/- 0.011`；`x_displacement` 为 `1.003 +/- 0.008`。相比第二版 `x_velocity=0.474 +/- 0.431`，第三版消除了本次三个 seed 中的站立策略，并显著降低步态方差。
 
 同一 profile 的小规模横向与消融筛选已经完成。`FedEvoSAC-full` 使用三个 seed；其余方法当前都只有 seed 0，因此下面的单 seed 数值只能诊断实现和学习过程，不能用于显著性或方差结论：

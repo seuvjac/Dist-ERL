@@ -69,6 +69,8 @@ METRIC_FIELDS = [
     'candidate_eval_mean', 'candidate_eval_std', 'local_updates_per_worker',
     'local_candidate_accept_rate', 'local_candidate_gain_mean',
     'accepted_client_uploads', 'injection_reference_score',
+    'accepted_delta_norm_mean', 'accepted_delta_norm_max',
+    'client_actor_warmup_active', 'candidate_pool_size', 'candidate_source',
     'stagnation_boost_count',
     'eval_episode_length_mean', 'eval_forward_return_mean',
     'eval_survive_return_mean', 'eval_ctrl_return_mean',
@@ -128,6 +130,10 @@ def parse_args():
                         help='Critic-only updates after loading the server actor')
     parser.add_argument('--client-actor-lr', type=float, default=0.0,
                         help='Optional SAC client actor learning rate; <=0 uses --lr')
+    parser.add_argument('--client-actor-warmup-rounds', type=int, default=0,
+                        help='Initial federated rounds that update only the local critic')
+    parser.add_argument('--client-upload-blend', type=float, default=1.0,
+                        help='Trust-region blend from server actor to locally updated actor')
     parser.add_argument('--client-validation-episodes', type=int, default=0,
                         help='Held-out episodes used to reject a degrading local actor upload')
     parser.add_argument('--client-rollback-margin', type=float, default=0.0,
@@ -320,6 +326,8 @@ def _setup_local_logger(args):
         'client_updates': args.client_updates,
         'client_critic_warmup_updates': args.client_critic_warmup_updates,
         'client_actor_lr': args.client_actor_lr,
+        'client_actor_warmup_rounds': args.client_actor_warmup_rounds,
+        'client_upload_blend': args.client_upload_blend,
         'client_validation_episodes': args.client_validation_episodes,
         'client_rollback_margin': args.client_rollback_margin,
         'client_heterogeneity': args.client_heterogeneity,
@@ -647,7 +655,10 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         ray.get(manager.evolve_population.remote())
         ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))
 
-        best = ray.get(manager.get_best_individual.remote())
+        # Federated SAC must refine the same independently validated actor
+        # reported as deployable. A generation-best actor uses different
+        # common seeds and can be much weaker on the archive validation suite.
+        best = ray.get(manager.get_archive_best_individual.remote())
         local_refinement_enabled = args.client_rollouts > 0 and args.client_updates > 0
         fed_round_applied = int(
             local_refinement_enabled
@@ -661,19 +672,30 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         if fed_round_applied:
             client_indices = np.random.choice(
                 np.arange(args.num_clients), size=selected_count, replace=False)
+            client_actor_warmup_active = (
+                fed_aggregation_count < max(0, args.client_actor_warmup_rounds)
+            )
+            round_critic_warmup = (
+                args.client_updates
+                if client_actor_warmup_active
+                else args.client_critic_warmup_updates
+            )
             train_refs = [
                 clients[int(idx)].local_train.remote(
                     best.weights, args.client_rollouts, args.client_updates,
                     args.seed + generation * 1000,
-                    args.client_critic_warmup_updates,
+                    round_critic_warmup,
                     args.client_validation_episodes,
                     args.client_rollback_margin,
                     args.ea_freeze_sac_log_std,
+                    args.client_upload_blend,
                 )
                 for idx in client_indices
             ]
             train_results = ray.get(train_refs)
         client_rewards = [r.get('upload_score', r['avg_reward']) for r in train_results]
+        if not fed_round_applied:
+            client_actor_warmup_active = False
         aggregation_client_indices, aggregation_rewards, client_weights = (
             _accepted_client_uploads(client_indices, train_results)
         )
@@ -724,17 +746,51 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         aggregated_eval_mean = float('-inf')
         aggregated_eval_std = 0.0
         aggregated_eval_steps = 0
-        if aggregated:
+        candidate_source = ''
+        candidate_pool = []
+        accepted_rows = [
+            (int(idx), result)
+            for idx, result in zip(client_indices, train_results)
+            if int(result.get('candidate_accepted', 1)) == 1
+            and float(result.get('candidate_delta_norm', 0.0)) > 1e-10
+        ]
+        if aggregated and accepted_rows:
+            candidate_pool.append(('softmax', aggregated))
+        if len(accepted_rows) > 1:
+            for client_id, result in accepted_rows:
+                local_candidate = {
+                    key: np.array(value, copy=True)
+                    for key, value in best.weights.items()
+                }
+                local_candidate.update(result['weights'])
+                candidate_pool.append((f'client_{client_id}', local_candidate))
+
+        aggregated = {}
+        results = []
+        selected_eval_score = float('-inf')
+        for source, candidate_weights in candidate_pool:
             refs = [
                 client.evaluate_weights.remote(
-                    aggregated, archive_seed, args.archive_eval_episodes)
+                    candidate_weights, archive_seed, args.archive_eval_episodes)
                 for client in clients
             ]
-            results = ray.get(refs)
-            aggregated_eval_steps = int(sum(result.get('total_steps', 0) for result in results))
-            scores = [float(result['fitness']) for result in results]
-            aggregated_eval_mean = float(np.mean(scores))
-            aggregated_eval_std = float(np.std(scores))
+            candidate_results = ray.get(refs)
+            aggregated_eval_steps += int(sum(
+                result.get('total_steps', 0) for result in candidate_results))
+            scores = [float(result['fitness']) for result in candidate_results]
+            candidate_mean = float(np.mean(scores))
+            candidate_std = float(np.std(scores))
+            candidate_score = (
+                candidate_mean
+                - max(0.0, args.fed_inject_std_penalty) * candidate_std
+            )
+            if candidate_score > selected_eval_score:
+                selected_eval_score = candidate_score
+                candidate_source = source
+                aggregated = candidate_weights
+                aggregated_eval_mean = candidate_mean
+                aggregated_eval_std = candidate_std
+                results = candidate_results
         injection_reference_score = float(
             archive_stats_before_fed.get('archive_best_score', current_best)
         )
@@ -894,6 +950,25 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             ),
             'accepted_client_uploads': len(aggregation_rewards),
             'injection_reference_score': injection_reference_score,
+            'accepted_delta_norm_mean': (
+                float(np.mean([
+                    result.get('candidate_delta_norm', 0.0)
+                    for result in train_results
+                    if int(result.get('candidate_accepted', 1)) == 1
+                ]))
+                if aggregation_rewards else 0.0
+            ),
+            'accepted_delta_norm_max': (
+                float(np.max([
+                    result.get('candidate_delta_norm', 0.0)
+                    for result in train_results
+                    if int(result.get('candidate_accepted', 1)) == 1
+                ]))
+                if aggregation_rewards else 0.0
+            ),
+            'client_actor_warmup_active': int(client_actor_warmup_active),
+            'candidate_pool_size': len(candidate_pool),
+            'candidate_source': candidate_source,
             'stagnation_boost': stagnation_boost,
             'stagnation_boost_count': stagnation_boost_count,
             'eval_episode_length_mean': stats.get(

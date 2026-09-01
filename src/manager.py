@@ -416,6 +416,12 @@ class EAManager:
     def get_best_individual(self) -> Individual:
         return max(self.population, key=lambda x: x.fitness)
 
+    def get_archive_best_individual(self) -> Individual:
+        """Return the independently validated deployable actor."""
+        if self._elite_archive:
+            return self._elite_archive[0].copy()
+        return max(self.population, key=lambda x: x.fitness).copy()
+
     def get_elite_seeds(self, k: int = 5) -> List[int]:
         elites = self.population[:k]
         return [ind.seed for ind in elites]
