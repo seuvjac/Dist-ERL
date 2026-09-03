@@ -7,10 +7,19 @@ import numpy as np
 
 from scripts.plot_fedrl_heterogeneous import (
     _align_runs_to_first_evaluation,
+    _ci_multiplier,
     _display_env,
     _smooth_nan,
     load_runs,
 )
+
+
+def test_ci95_uses_student_t_for_small_seed_counts():
+    multipliers = _ci_multiplier(np.asarray([1, 5, 30]), 0.95)
+
+    assert multipliers[0] == 0.0
+    assert np.isclose(multipliers[1], 2.776445, atol=1e-5)
+    assert np.isclose(multipliers[2], 2.045230, atol=1e-5)
 
 
 def test_smoothing_preserves_support_and_endpoints():

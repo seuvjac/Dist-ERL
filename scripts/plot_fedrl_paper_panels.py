@@ -2,6 +2,7 @@
 """Render a compact multi-environment FedRL figure for paper drafts."""
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.plot_fedrl_heterogeneous import (
     _align_runs_to_first_evaluation,
     _apply_plot_style,
+    _ci_multiplier,
     _smooth_nan,
     load_runs,
 )
@@ -55,7 +57,7 @@ def parse_args():
     parser.add_argument('--plot-kind', choices=['comparison', 'ablation'], default='comparison')
     parser.add_argument('--x-axis', choices=['steps', 'progress', 'round'], default='round')
     parser.add_argument('--metric', choices=['current', 'candidate', 'best'], default='current')
-    parser.add_argument('--variance', choices=['seed', 'sem', 'ci90', 'ci95', 'none'], default='ci90')
+    parser.add_argument('--variance', choices=['seed', 'sem', 'ci90', 'ci95', 'none'], default='ci95')
     parser.add_argument('--smooth-window', type=int, default=7)
     parser.add_argument('--target-x', type=float, default=None)
     parser.add_argument('--align-start', action='store_true',
@@ -80,9 +82,9 @@ def _band(mat, mode):
         return mean, std
     uncertainty = std / np.sqrt(np.maximum(1, count))
     if mode == 'ci90':
-        uncertainty *= 1.645
+        uncertainty *= _ci_multiplier(count, 0.90)
     elif mode == 'ci95':
-        uncertainty *= 1.960
+        uncertainty *= _ci_multiplier(count, 0.95)
     return mean, uncertainty
 
 
@@ -108,9 +110,17 @@ def main():
     if args.align_start:
         runs = _align_runs_to_first_evaluation(runs)
 
-    fig, axes = plt.subplots(1, len(args.envs), figsize=(5.4 * len(args.envs), 4.9), squeeze=False)
+    cols = min(3, len(args.envs))
+    rows = max(1, math.ceil(len(args.envs) / cols))
+    fig, axes = plt.subplots(
+        rows,
+        cols,
+        figsize=(5.4 * cols, 4.55 * rows),
+        squeeze=False,
+    )
+    flat_axes = axes.ravel()
     handles = {}
-    for ax, env in zip(axes[0], args.envs):
+    for ax, env in zip(flat_axes, args.envs):
         env_runs = [run for run in runs if run['env'] == env]
         if not env_runs:
             ax.set_visible(False)
@@ -134,11 +144,11 @@ def main():
             if np.nanmax(uncertainty) > 0:
                 ax.fill_between(
                     xs, mean - uncertainty, mean + uncertainty,
-                    color=color, alpha=0.13 if is_proposed else 0.055, linewidth=0,
+                    color=color, alpha=0.15 if is_proposed else 0.09, linewidth=0,
                     zorder=2 if is_proposed else 1,
                 )
             line, = ax.plot(
-                xs, mean, color=color, linestyle=LINE_STYLES.get(label, '-'),
+                xs, mean, color=color, linestyle='-',
                 linewidth=3.25 if is_proposed else 2.1, solid_capstyle='round',
                 label=label, zorder=4 if is_proposed else 3,
             )
@@ -154,7 +164,11 @@ def main():
         ax.margins(x=0.0, y=0.04)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-    axes[0][0].set_ylabel('Average evaluation return')
+    for index, ax in enumerate(flat_axes):
+        if index >= len(args.envs):
+            ax.set_visible(False)
+        elif index % cols == 0:
+            ax.set_ylabel('Average evaluation return')
     ordered = sorted(handles)
     if ordered:
         fig.legend(
@@ -164,7 +178,7 @@ def main():
             ncol=1, fontsize=9, framealpha=0.96,
             borderpad=0.55, labelspacing=0.35, handlelength=2.4,
         )
-    fig.tight_layout(rect=(0.0, 0.21 if ordered else 0.0, 1.0, 1.0))
+    fig.tight_layout(rect=(0.0, 0.12 if ordered else 0.0, 1.0, 1.0))
     out = Path(args.out_file)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=220, bbox_inches='tight')

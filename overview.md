@@ -1,25 +1,27 @@
 # FedEvoSAC / Dist-ERL
 
-> 最后核对：2026-08-25。当前主线是连续动作 `FedEvoSAC`。40-seed 正式实验已揭示
-> 默认 Hopper reward 的 survival shortcut：Full 的 `932.25 +/- 184.81` 主要来自约 `906`
-> 分存活奖励，平均前进速度只有 `0.049`。因此 Hopper 消融已切换到显式
-> `Hopper-Locomotion (healthy_reward=0.05, forward_reward_weight=1.0)`；旧默认 reward
-> 数据继续保留用于审计，但不能与新版任务合并统计或作为 locomotion 优势证据。首轮
-> 3-seed 消融进一步暴露出被拒绝的 client actor 仍参与聚合以及注入门槛评估口径不一致，
-> `2026-08-26` 已修复并启动第二版验证。
+> 最后核对：2026-09-03。当前主线是连续动作 `FedEvoSAC`。新版正式协议使用
+> Walker2d-Locomotion、Hopper-Locomotion、Ant-v5、HalfCheetah-v5 和 Swimmer-v5，
+> 输出 current return 对 communication rounds / counted interactions 的均值曲线与双侧
+> 95% Student-t CI，不再生成 normalized training-progress 图。正式统计使用运行前固定的
+> 30 个 held-out seed；禁止按 Full 得分事后筛选 seed。5 个运行前固定 seed 只允许用于
+> 个体轨迹示例和敏感度分析，不能替代 n=30 汇总与显著性检验。
 
 ## 1. Federated RL 问题设定
 
-本项目研究异质 client 下的连续动作 Federated RL。当前正式实验使用两个 MuJoCo 环境：
+本项目研究异质 client 下的连续动作 Federated RL。当前正式实验使用五个 MuJoCo 环境：
 
 ```text
 Walker2d-Locomotion (基于 Walker2d-v5)
 Hopper-Locomotion (基于 Hopper-v5)
+Ant-v5
+HalfCheetah-v5
+Swimmer-v5
 ```
 
 每个 client 拥有自己的私有环境、私有 replay buffer 和本地 SAC learner。client 之间不共享 trajectory，服务器只能接收 actor 参数、reward / fitness 等标量统计信息；critic、target critic、temperature 和 replay buffer 全部留在本地。
 
-框架仍支持 Swimmer 及动力学、观测、动作、reward-scale 扰动，但 Swimmer 的历史多 seed 方差过大，且修复后的消融尚未形成可靠证据，因此从 `2026-08-05` 起退出正式主实验、消融和论文图。旧日志继续保留以便审计，代码支持仅用于复现历史结果。开发版对 Walker2d 和 Hopper 都启用 `env_params_only` dynamics heterogeneity，强度分别为 `0.30` 和 `0.25`；新版 Walker 协议已通过 locomotion pilot，下一步先恢复小规模横向和消融验证。`Walker2d-Locomotion` 是显式配置的任务变体，不与 Gymnasium 默认 Walker2d 成绩直接比较。
+2026-09-03 协议重新纳入 Ant、HalfCheetah 和 Swimmer，用于扩大任务覆盖；这不会抹去旧实验发现的风险。Swimmer 的历史 seed 方差较大，Ant 的默认 healthy reward 可能形成生存捷径，HalfCheetah 的高维 actor 搜索可能收敛较慢，因此三者必须完整报告全部预注册 seed、95% CI、收敛率和 locomotion diagnostics，不能只展示有利运行。Walker2d 和 Hopper 启用 `env_params_only` dynamics heterogeneity，强度分别为 `0.30` 和 `0.25`；Ant、HalfCheetah 和 Swimmer 分别使用 `0.15`、`0.15` 和 `0.12`。`Walker2d-Locomotion` 与 `Hopper-Locomotion` 是显式 reward 变体，不与 Gymnasium 默认成绩直接混合比较。
 
 异质性来自不同 client 的局部 MDP 扰动：
 
@@ -27,6 +29,9 @@ Hopper-Locomotion (基于 Hopper-v5)
 |------|----------|----------------------|
 | `Walker2d-Locomotion` | continuous | 基于 `Walker2d-v5`；gravity、左右腿质量/惯量、左右关节阻尼、脚底摩擦、左右执行器 gear；`healthy_reward=0.05`、`forward_reward_weight=1.0` |
 | `Hopper-Locomotion` | continuous | 基于 `Hopper-v5`；gravity、body mass、joint damping、geom friction；`healthy_reward=0.05`、`forward_reward_weight=1.0` |
+| `Ant-v5` | continuous | gravity、body mass、joint damping、geom friction；`0.15 / env_params_only` |
+| `HalfCheetah-v5` | continuous | gravity、body mass、joint damping、geom friction；`0.15 / env_params_only` |
+| `Swimmer-v5` | continuous | body mass、joint damping、geom friction；`0.12 / env_params_only` |
 
 框架支持以下五种异质联邦场景：
 
@@ -59,6 +64,9 @@ FedEvoSAC
 ```text
 Walker2d-Locomotion (基于 Walker2d-v5)
 Hopper-Locomotion (基于 Hopper-v5)
+Ant-v5
+HalfCheetah-v5
+Swimmer-v5
 ```
 
 连续主对照组：
@@ -214,16 +222,16 @@ FedEvoSAC 聚合的是 client 上传的 actor 参数，不聚合 trajectory，�
 
 | 机制 | 当前参数 | 作用 |
 |------|----------|------|
-| 聚合周期 | Walker2d / Hopper 分别每 `5 / 4` 代 | 在长 horizon 任务中控制 SAC refinement 与 EA 评估的预算占比 |
-| score normalization | Walker2d / Hopper: `relative_gain` | 按各 client 相对自身历史的提升计算权重，降低 reward scale 差异的直接影响 |
-| 温度控制 | Walker2d normalized / raw 为 `8 / 60`，Hopper 为 `1 / 50` | normalized score 与 raw return 分开定温度，避免消融定义互相污染 |
-| score scale | Walker2d / Hopper 分别为 `8 / 1` | 在保持归一化的同时调节 client 权重区分度 |
-| reward scale EMA | `--fed-score-ema-beta 0.90` | 为两个正式环境维护每个 client 的 reward baseline / scale |
+| 聚合周期 | Walker2d/Hopper/Ant/HalfCheetah/Swimmer 为 `5/4/4/4/2` 代 | 在长 horizon 任务中控制 SAC refinement 与 EA 评估的预算占比 |
+| score normalization | 五个环境均为 `relative_gain` | 按各 client 相对自身历史的提升计算权重，降低 reward scale 差异的直接影响 |
+| normalized temperature | Walker2d/Hopper/Ant/HalfCheetah/Swimmer 为 `8/1/60/4/4` | 环境维度和 reward range 不同，因此预注册环境级温度，不在 seed 结果出现后修改 |
+| score scale | Walker2d/Hopper/Ant/HalfCheetah/Swimmer 为 `8/1/4/4/4` | 在保持归一化的同时调节 client 权重区分度 |
+| reward scale EMA | `--fed-score-ema-beta 0.90` | 为每个正式环境维护每个 client 的 reward baseline / scale |
 | federation warm-up | 前两次聚合使用 warm-up score，并跳过 injection | 避免本地 critic 尚未校准时破坏 archive elite |
 | raw softmax 敏感性对照 | `--fed-ablation raw_softmax` | 保留原始 reward softmax，用于单独筛选聚合策略，不进入模块消融图 |
 | 低分过滤 | `--fed-min-client-score-quantile 0.25` | 丢弃低质量 actor update；uniform 消融不执行该过滤 |
-| delta clipping | Walker2d / Hopper 均为 `4` | 限制 client update 的参数步长 |
-| soft injection | `blend=0.50`、noise `0.005` | 将通过独立验证的聚合 actor 低噪声注入 EA 弱个体 |
+| delta clipping | Walker2d/Hopper/Ant/HalfCheetah/Swimmer 为 `4/0.5/4/1/3` | 限制 client update 的全局 L2 参数步长 |
+| soft injection | 环境级低噪声、受限 blend，Ant/HalfCheetah/Swimmer 每次最多迁移 1 个个体 | 将通过独立验证的聚合 actor 注入 EA，同时避免复制过多导致种群塌缩 |
 
 聚合形式是以当前 best actor 为中心的 delta aggregation：
 
@@ -234,7 +242,7 @@ theta_fed = theta_best + sum_i w_i * delta_i
 
 这比直接平均完整 actor 更稳。聚合器直接消费上游明确生成的 raw / batch-zscore / relative-gain score，不再在 `aggregate_weight_dicts()` 内二次 z-score；因此 `fed_score_scale` 和 raw-softmax 的定义均与日志一致。
 
-正式 `FedEvoSAC-full` 在 Walker2d-Locomotion 和 Hopper 都使用 `relative_gain`。`batch_zscore`、`raw_softmax` 与 `uniform_aggregation` 作为聚合敏感性对照保留，用来回答不同归一化方式是否比直接用 episodic return 或均匀平均更稳定。它们单独进入 aggregation screening，不进入正式模块消融图。
+正式 `FedEvoSAC-full` 在五个环境都使用 `relative_gain`。`batch_zscore`、`raw_softmax` 与 `uniform_aggregation` 作为聚合敏感性对照保留，用来回答不同归一化方式是否比直接用 episodic return 或均匀平均更稳定。模块消融图仍只包含 Full、no-local-RL、no-EA-injection 和 no-heterogeneity；异质性强度敏感度分析单独出图，不与模块消融混线。
 
 ## 9. Baseline 和对比曲线
 
@@ -290,14 +298,14 @@ FedEvoSAC-uniform_aggregation
 
 | 外部代码 | 实际 RL 主体 | 本地路径 | 可比环境 | 使用方式 |
 |----------|--------------|----------|----------|----------|
-| FedFormer | SAC | `/home/ywj/code/FedFormer` | MetaWorld MT10，不是当前两个 Gymnasium 连续主环境 | related work 或单独 MetaWorld 复现，不混入主图 |
+| FedFormer | SAC | `/home/ywj/code/FedFormer` | MetaWorld MT10，不是当前五个 Gymnasium 连续主环境 | related work 或单独 MetaWorld 复现，不混入主图 |
 | Byzantine-Federated-RL / FedPG-BR | policy gradient | `/home/ywj/code/Byzantine-Federated-RL` | CartPole-v1、LunarLander-v2 | 可作为离散 external-original 辅助复现 |
 | Federated-DRL | DQN / DDQN | `/home/ywj/code/Federated-DRL` | CartPole-v1、LunarLander-v2、Mario | 可作为 FedAvg-DQN 外部原代码复现 |
 | FederatedRL | PPO | `/home/ywj/code/FederatedRL` | CartPole-v1、若干 MuJoCo/IoT 任务 | 可作为 PPO-FedRL related work，默认不进连续主图 |
 
 当前可严格复现的外部对照边界：
 
-- `Reacher`：当前外部仓库没有同版本、同协议的严格复现结果；它只保留为内部调试环境，已经退出当前两环境主图。
+- `Reacher`：当前外部仓库没有同版本、同协议的严格复现结果；它只保留为内部调试环境，已经退出当前五环境主图。
 - `CartPole / Acrobot / MountainCar`：只保留为 legacy discrete / related-work 复核，不进入当前连续 FedEvoSAC 主图或正式统计。
 - `FedFormer`：原论文是 MetaWorld 连续控制 SAC；若要比较，应另开 MetaWorld 复现实验。
 
@@ -309,11 +317,12 @@ FedEvoSAC-uniform_aggregation
 ./run_continuous_fedevosac_suite.sh
 ```
 
-当前两环境主实验以两个独立 seed 为一个最小调度单元。环境分支分别覆盖 Walker2d 和 Hopper 的异质性参数：
+新版正式实验以单个独立 seed 为最小审计单元，后台可并行调度 3 个 seed。主脚本预先固定 seed `100..129`，全部 30 个 seed 都进入汇总：
 
 ```text
 NUM_WORKERS=3
-SEEDS="0 1"
+SEED_BASE=100
+NUM_SEEDS=30
 BUDGET_PRESET=converged
 ```
 
@@ -322,9 +331,24 @@ BUDGET_PRESET=converged
 ```text
 Walker2d-Locomotion (脚本参数仍为 Walker2d-v5)
 Hopper-Locomotion (脚本参数仍为 Hopper-v5)
+Ant-v5
+HalfCheetah-v5
+Swimmer-v5
 ```
 
-HalfCheetah 和 Swimmer 已从正式主实验中移除。旧 `perenv_tuned_s0` 中 Swimmer 达到 `242.70`，但三 seed 结果为 `111.91 +/- 92.52`；随后 40-seed 实验仍只有 `26/40` 个 run 尾部稳定。该环境不再通过继续挑 seed 或改变画图方式处理，而是停止新增正式实验。旧数据、日志和代码分支全部保留，但不能进入新版主结论。
+旧 `perenv_tuned_s0` 中 Swimmer 达到 `242.70`，但三 seed 结果为 `111.91 +/- 92.52`，随后历史 40-seed 实验也只有 `26/40` 个 run 尾部稳定。新版按用户要求重新纳入 Swimmer 和 HalfCheetah，但必须把这一既有风险写入结果分析，并以完整 30-seed 结果决定其是否能支撑主结论。不得通过挑选 5 个高分 seed 掩盖失败运行。
+
+正式 30-seed 启动入口：
+
+```bash
+./scripts/run_fedrl_30seed_experiment.sh
+```
+
+异质性强度敏感度分析使用运行前固定的 5 个独立 seed 和 5 个强度水平，只运行 Full：
+
+```bash
+./scripts/run_fedrl_sensitivity_analysis.sh
+```
 
 已完成的 `20260714` 历史三环境运行协议如下，数值已由最终 run 的 `metadata.json` 复核，不会回写或混入新版结果：
 
@@ -346,7 +370,7 @@ HalfCheetah 和 Swimmer 已从正式主实验中移除。旧 `perenv_tuned_s0` �
 - archive 与 injection 采用跨 client risk-adjusted score 验收，风险惩罚系数为 `0.25`，降低幸运轨迹进入 archive 的概率；
 - `env_params_only` 的扰动只在环境 wrapper 中执行，client 不再重复施加 reward scale/action noise。
 
-Walker2d 的 `relative_gain` 在早期聚合中出现过 `aggregation_score_std=367` 和 entropy `0`，说明短历史 EMA/std 可能让单 client 垄断权重。3-seed 筛选显示 batch-zscore 更高且更稳，但正式协议按当前算法设计决定继续保留 relative-gain；因此该风险必须通过 40-seed 正式结果和 entropy 诊断如实检验。Walker normalized/raw temperature 为 `8 / 60`，score scale 为 `8.0`；Hopper分别为 `1 / 50` 和 `1.0`。
+Walker2d 的 `relative_gain` 在早期聚合中出现过 `aggregation_score_std=367` 和 entropy `0`，说明短历史 EMA/std 可能让单 client 垄断权重。3-seed 筛选显示 batch-zscore 更高且更稳，但正式协议按当前算法设计决定继续保留 relative-gain；因此该风险必须通过新版 30-seed 正式结果和 entropy 诊断如实检验。Walker normalized/raw temperature 为 `8 / 60`，score scale 为 `8.0`；Hopper分别为 `1 / 50` 和 `1.0`。
 
 为了降低无意义的 evaluation 方差，同时保留可检验的 FedEvoSAC 消融差异，当前调参版允许每个环境单独设置 client heterogeneity。推荐设置为：
 
@@ -392,9 +416,9 @@ Hopper 正式 40-seed 旧协议也出现同类问题：Full 的最终总回报�
 
 这轮结果验证了 locomotion task 修复，却没有验证当时的 normalized-relative-gain 聚合：full 在最终回报上只与四个 baseline 持平，并且约到 220k interactions 才接近其最终水平；四个 baseline 在约 20k--70k 内就取得 130 以上的 deployable checkpoint。`raw_softmax` 和 uniform 单 seed 又明显高于 full，说明仅含 dynamics heterogeneity、没有 reward-scale 扰动时，relative-gain normalization/temperature 可能削弱了有效 client 排序。另一方面，`no_ea_injection` 明显下降，`no_local_rl` 也较低，提示 EA-to-RL injection 与本地 SAC refinement 值得保留并扩大 seed 验证。baseline 的 current 曲线主要由 rollback checkpoint 保持稳定，其 candidate 策略仍多次退化，因此后续必须同时报告 deployable current 和 candidate，而不能只凭平坦主曲线声称训练稳定。
 
-随后使用开发 seed `0/1/2`、相同 300k interaction 预算完成聚合筛选：`batch_zscore = 145.34 +/- 1.91`，`relative_gain = 137.40 +/- 1.81`，`raw = 127.43 +/- 18.27`。尽管 batch-zscore 在该开发集更高，正式 Walker Full 按算法设计决定继续保留 relative-gain；正式 20 x 2 使用不重叠的 seed `3..42`，用于检验这一选择能否泛化。正式结论来自全部 40 个 held-out seeds，不能按 Full 是否领先筛除 repeat。
+随后使用开发 seed `0/1/2`、相同 300k interaction 预算完成聚合筛选：`batch_zscore = 145.34 +/- 1.91`，`relative_gain = 137.40 +/- 1.81`，`raw = 127.43 +/- 18.27`。尽管 batch-zscore 在该开发集更高，Walker Full 按算法设计继续保留 relative-gain。旧 20 x 2 协议使用 seed `3..42`；新版使用不重叠的 seed `100..129`，正式结论来自全部 30 个 seed，不能按 Full 是否领先筛除运行。
 
-正式实验不再包含 Swimmer。新版对两个环境统一采用 actor-mean EA、client-local `log_std`/temperature、local candidate rollback、risk-adjusted archive 验收和低噪声 injection。正式结论必须来自完整 40-seed aggregate；smoke test 只验证调用链，不作为性能证据。
+五环境新版统一采用 actor-mean EA、client-local `log_std`/temperature、local candidate rollback、risk-adjusted archive 验收和低噪声 injection。正式结论必须来自完整 30-seed aggregate；smoke test 和预注册 5-seed 敏感度只验证趋势与稳健性边界，不替代主统计。
 
 Reacher 已从主环境中移出。它的短 horizon 和 dense distance reward 更适合作调试 SAC 稳定性，不适合作为 EA+FedSAC 的核心证据：FedEvoSAC 的 population search 优势容易被短任务的快速局部优化掩盖，且 evaluation variance 会显著影响结论。当前改用 `Walker2d-v5`，它同样是 MuJoCo 连续控制，但 horizon 更长、动作维度更高、步态探索更依赖 actor 多样性，更适合检验 EA + federated SAC。Hopper 的 `1000+` 回报在 MuJoCo Hopper 中并非异常上界，但仍偏中等，因此 Hopper 保留为可继续提分的 locomotion 任务。
 
@@ -457,17 +481,15 @@ plots_new/fedevosac_pusher_pilot_2seed_20260721/aggregate/
 
 Ant 与 Pusher pilot 都只有 `n=2`，只用于环境筛选和配置诊断，不能作为显著性结论。
 
-新结果只写入 `plots_new`，目录结构为：
+2026-09-03 之后的新结果只写入 `plots_2`，目录结构为：
 
 ```text
-plots_new/<experiment_id>/repeats/repeat_XX/      # 每个 n=2 repeat 的图、表与收敛检查
-plots_new/<experiment_id>/aggregate/main/         # round 主对比图
-plots_new/<experiment_id>/aggregate/supplement/   # steps 样本效率图
-plots_new/<experiment_id>/aggregate/diagnostics/  # progress 形状诊断图
-plots_new/<experiment_id>/aggregate/ablation/     # 独立消融图
-plots_new/<experiment_id>/aggregate/paper_figures/# 两环境横向拼图 PNG/PDF
-plots_new/<experiment_id>/aggregate/tables/       # final、best 与 convergence CSV
-plots_new/selected_best_converged_20260721/        # 跨批次事后筛选图，仅作展示/辅助证据
+plots_2/<experiment_id>/aggregate/main/          # reward vs communication rounds
+plots_2/<experiment_id>/aggregate/supplement/    # reward vs counted interactions
+plots_2/<experiment_id>/aggregate/ablation/      # 独立模块消融图
+plots_2/<experiment_id>/aggregate/paper_figures/ # 五环境 panel PNG/PDF
+plots_2/<experiment_id>/aggregate/tables/        # 95% CI、收敛与 Wilcoxon CSV
+plots_2/<sensitivity_id>/heterogeneity/           # 异质性强度敏感度图与 CSV
 ```
 
 旧 `fedevosac_perenv_tuned_s0_comparison` 会原样复制到 `reference_single_seed`，但明确标记为 single-seed reference，不参加新均值、置信区间或显著性统计。
@@ -479,6 +501,7 @@ logs/                 # 所有 metrics、metadata、shell run log
 logs/run/             # 后台/脚本 stdout 日志
 plots/                # 所有对比图、消融图、表格
 plots_new/            # 新 20x2 实验，和历史 plots 完全分开
+plots_2/              # 2026-09-03 五环境、30-seed、95% CI 新协议
 plots/training/       # src.main 生成的单次训练过程图
 plots/tables/         # 零散 summary / significance CSV
 ```
@@ -548,19 +571,18 @@ python -m src.main \
 
 主曲线默认使用 `eval_reward_mean`，表示 server 当前真正部署的 checkpoint。FedEvoSAC 的 checkpoint 来自通过固定 validation 的 global elite archive；baseline 则使用带 rollback 验收的 global actor。因此主曲线允许在候选退化时保持上一策略，属于 deployable-policy 曲线，不是未经筛选的瞬时 candidate 曲线，也不能描述成纯粹的 raw-learning trajectory。baseline 和 FedEvoSAC 的本轮聚合候选记录在 `candidate_eval_mean`，应作为辅助曲线检查聚合是否退化；FedEvoSAC 的本地 SAC rollout 分数保存在 `client_reward_mean` / `client_reward_std`。`best_fitness` / `archive_best` 只用于解释 EA 搜索和 archive，不再混入主曲线取最大值。
 
-三种横坐标回答的是不同问题，不能互相替代：
+新版只保留两种横坐标，它们回答不同问题，不能互相替代：
 
 | 横坐标 | 回答的问题 | 论文位置 | 限制 |
 |--------|------------|----------|------|
 | communication round | 达到某个 return 需要多少次真实 server-client 协调，即通信效率 | 主图 | FedEvoSAC 与 baseline 每轮的 payload 和环境交互量不同，不能单独证明样本或字节效率 |
 | counted environment interactions | 在相同真实采样预算下谁学得更快，即样本效率 | 补充主证据 | 必须统计 population、local rollout、archive/candidate validation 的全部交互 |
-| normalized progress (%) | 从该 run 第一次评估的 `0%` 到最后评估的 `100%`，比较学习形状、停滞点和末段稳定性 | 诊断/附录 | 会抹去绝对预算差异，不能据此宣称更高效率 |
 
-这种主图/补充图分层与 FRL 文献的常见结构一致。[Federated Reinforcement Learning with Environment Heterogeneity](https://proceedings.mlr.press/v151/jin22a.html) 在复杂任务中画 averaged return vs episodes/frames，并以均值和 `1.65 x standard error` 阴影展示不确定性，同时单独研究 local-update interval 对通信频率的影响；[Federated Reinforcement Learning: Linear Speedup Under Markovian Sampling](https://proceedings.mlr.press/v162/khodadadian22a.html) 则把 environment iterations/sample complexity 与 communication cost 分开分析。本项目因此输出两环境横向 panel：round 是 main figure，steps 是 supplementary evidence，progress 是 diagnostics。旧日志没有 `communication_round` 时绘图器会回退到 `generation`，仅用于历史图兼容；新实验不使用该回退口径。
+这种主图/补充图分层与 FRL 文献的常见结构一致。[Federated Reinforcement Learning with Environment Heterogeneity](https://proceedings.mlr.press/v151/jin22a.html) 在复杂任务中画 averaged return vs episodes/frames 并显示跨运行不确定性，同时单独研究 local-update interval 对通信频率的影响；[Federated Reinforcement Learning: Linear Speedup Under Markovian Sampling](https://proceedings.mlr.press/v162/khodadadian22a.html) 则把 environment iterations/sample complexity 与 communication cost 分开分析。本项目因此输出五环境 panel：round 是 main figure，steps 是 supplementary evidence。normalized progress 会抹去绝对预算差异，新协议不再生成。
 
-新图报告 deployable current policy 的跨 seed 均值和 90% normal-approximation CI（样本标准差 `ddof=1`，阴影为 `1.645 x standard error`），不再通过 `max(eval_reward_mean, eval_ea_mean, best_fitness, archive_best)` 拼接主指标；原始每 seed CSV、seed standard deviation 和无方差图仍保留，可复核置信带。单个 repeat 只有两个 seed，其区间只作运行诊断；正式 aggregate 使用 40 个独立 seed。平滑只作用于显示曲线，不改 summary CSV。每个 run 额外生成 `convergence_report.csv`：最后 6 个评估点的增益和范围必须落在绝对/相对容差内，未通过者不能在论文中标为 converged。尾部稳定只表示曲线不再明显变化，不等价于成功解决任务；低分停滞也可能被判为稳定。
+新图报告 deployable current policy 的跨 seed 均值和双侧 95% Student-t CI。每个横坐标位置使用当时可用 seed 的 sample SD（`ddof=1`）、标准误和对应自由度的 t 临界值；实线是均值，阴影是 95% CI。主指标不通过 `max(eval_reward_mean, eval_ea_mean, best_fitness, archive_best)` 拼接。正式 aggregate 使用全部 30 个预注册 seed，平滑只作用于显示曲线，不改 summary CSV。每个 run 额外生成 `convergence_report.csv`：最后 6 个评估点的增益和范围必须落在绝对/相对容差内。尾部稳定只表示曲线不再明显变化，不等价于成功解决任务；低分停滞也可能被判为稳定。
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`forward return`、`x velocity`、`max_steps`、`max_round`、`wall_time_sec` 和 convergence 状态。新版正式证据只来自显式标注 reward profile 的 `Walker2d-Locomotion` 和 `Hopper-Locomotion`；Swimmer 只出现在明确标注的历史分析中。
+最终表格的展示列使用 `mean +/- 95% CI half-width`，并保留 sample SD、CI 下界/上界、`forward return`、`x velocity`、`max_steps`、`max_round`、`wall_time_sec` 和 convergence 状态作为审计字段。方法差异采用相同 seed 配对的 Wilcoxon signed-rank test；主报告使用双侧检验，环境内对多个 baseline 的 p 值做 Holm 校正，同时报告胜/平/负次数、paired bootstrap 95% CI 和 rank-biserial effect size。该检验遵循 Wilcoxon 的 paired ranking 思路：F. Wilcoxon, “Individual Comparisons by Ranking Methods,” *Biometrics Bulletin*, vol. 1, no. 6, pp. 80-83, 1945, doi:10.2307/3001968。5 个 paired seed 的双侧 exact Wilcoxon 最小 p 值为 0.0625，不能独立支撑 0.05 显著性声明，因此正式检验使用 n=30。
 
 ## 12. 历史完整实验结果与新版正式实验
 
@@ -602,15 +624,15 @@ plots_new/fedevosac_20x2_converged_20260714/aggregate/tables/
 logs/experiments/fedevosac_20x2_converged_20260714/
 ```
 
-`plots_new/selected_best_converged_20260721/` 保存了 Walker2d/Hopper 的跨批次展示候选。该目录有独立 `README.md` 和 `selection_manifest.csv`，属于 post-hoc supporting/visual collection，不能替代完整 `n=40` aggregate。Swimmer、Ant 和 Pusher 已从该论文候选目录移除。
+`plots_new/selected_best_converged_20260721/` 保存了 Walker2d/Hopper 的历史跨批次展示候选。该目录有独立 `README.md` 和 `selection_manifest.csv`，属于 post-hoc supporting/visual collection，不能替代完整 aggregate。新版 `plots_2` 不接受 Full-win 或高分 seed 筛选。
 
-新版正式实验 `fedevosac_formal_20x2_walker_hopper_20260805` 在代码与文档同步后启动，随后因 Walker task 定义问题暂停。后续正式调度使用两个环境、40 个独立 seed、相同 counted-interaction 预算、四个非 EA 联邦 SAC baseline，以及与横向图分离的三个消融；聚合策略筛选另行运行。只有完整 aggregate 和收敛检查通过后才可作为论文证据。
+历史正式实验 `fedevosac_formal_20x2_walker_hopper_20260805` 随后因 Walker task 定义问题暂停。2026-09-03 新协议改用五环境、30 个 held-out seed、相同 counted-interaction 预算、四个非 EA 联邦 SAC baseline，以及与横向图分离的三个消融；异质性敏感度另行运行。只有完整 aggregate、95% CI、收敛检查和配对显著性报告齐全后才可作为论文证据。
 
 ## 13. 当前实现状态
 
 已完成：
 
-- 连续正式环境主线：`Walker2d-Locomotion`、`Hopper-Locomotion`；Swimmer 仅保留历史复现支持；
+- 连续正式环境主线：`Walker2d-Locomotion`、`Hopper-Locomotion`、`Ant-v5`、`HalfCheetah-v5`、`Swimmer-v5`；
 - `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；
@@ -619,17 +641,19 @@ logs/experiments/fedevosac_20x2_converged_20260714/
 - delta clipping 与 bounded EA mutation；
 - global elite archive；
 - FedEvoSAC 连续对比和消融脚本；
-- 20 x 2 重复调度、断点续跑、独立日志和 aggregate renderer；
-- current deployable、candidate、steps、round、progress、90% CI 和 convergence report 分层输出；
-- 历史 40-seed 三环境实验已归档；新版两环境正式调度输出 8 张独立图、两环境 panel、summary / convergence 表；
+- 30 个预注册 held-out seed、断点续跑、独立日志和 aggregate renderer；
+- current deployable、candidate、steps、round、95% Student-t CI 和 convergence report 分层输出；normalized progress 已从新协议移除；
+- `comparison_wilcoxon.csv` / `ablation_wilcoxon.csv` 输出 paired Wilcoxon、Holm 校正、bootstrap 95% CI 和 rank-biserial effect size；
+- 五环境异质性强度敏感度脚本与独立结果目录；
+- 历史 40-seed 三环境实验已归档；新版正式结果统一写入 `plots_2`；
 - legacy 离散 `FedEvoFSAC`、`FSACPolicy` 和 DQN 代码仍可复核，但不属于当前实验主线。
 
 主要风险和下一步：
 
-- Swimmer 因历史 seed sensitivity 和不稳定收敛退出正式实验；不得用旧单 seed 高分替代多 seed 结论；
+- Swimmer 按新协议重新进入正式实验，但历史 seed sensitivity 和不稳定收敛风险仍成立；不得用旧单 seed高分或事后挑选 5 个 seed 替代 30-seed 结论；
 - Walker2d 的旧统一缩放异质性诱发约 1000 分的存活奖励局部最优；`Walker2d-Locomotion` 使用 gait-structured `0.30` profile、显式 `healthy_reward=0.05` 和 locomotion diagnostics，3-seed pilot 已通过，小规模 baseline/消融复核也已完成；
 - Hopper 默认 reward 的正式结果主要来自 survival shortcut；新版消融必须使用 `Hopper-Locomotion`，并以 forward return 和 x velocity 验证真实运动，不能只按 total return 排名；
-- Walker 聚合筛选显示 batch-zscore 在三个开发 seed 更高，但正式协议按设计保留 relative-gain；必须完整报告 40 个 held-out seeds，不能按 Full 排名挑选 repeat；
+- Walker 聚合筛选显示 batch-zscore 在三个开发 seed 更高，但正式协议按设计保留 relative-gain；必须完整报告 30 个 held-out seeds，不能按 Full 排名挑选运行；
 - deployable 主曲线带 archive / rollback，适合衡量最终可部署性能，但可能隐藏聚合 candidate 的瞬时退化；论文必须同时报告 candidate 或明确 checkpoint 规则；
 - actor-only 共享避免 critic scale mismatch，但 client critic 完全本地化，早期本地更新仍可能噪声较大；
 - raw reward softmax 容易受异质 client reward scale 影响；`aggregation_entropy`、`aggregation_score_std` 和 reward-scale stress test 仍需单独分析；

@@ -8,9 +8,10 @@ export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 FED_LOG_DIR=${FED_LOG_DIR:?FED_LOG_DIR is required}
 SAC_LOG_DIR=${SAC_LOG_DIR:-""}
 OUT_ROOT=${OUT_ROOT:?OUT_ROOT is required}
-ENVS=${ENVS:-"Walker2d-v5 Hopper-v5"}
-VARIANCE=${PLOT_VARIANCE:-"ci90"}
+ENVS=${ENVS:-"Walker2d-v5 Hopper-v5 Ant-v5 HalfCheetah-v5 Swimmer-v5"}
+VARIANCE=${PLOT_VARIANCE:-"ci95"}
 SMOOTH_WINDOW=${PLOT_SMOOTH_WINDOW:-"7"}
+INCLUDE_PROGRESS=${INCLUDE_PROGRESS:-"0"}
 
 render_individual() {
   local axis=$1
@@ -33,7 +34,9 @@ render_individual() {
 
 render_individual round "$OUT_ROOT/main/comparison_round"
 render_individual steps "$OUT_ROOT/supplement/comparison_steps"
-render_individual progress "$OUT_ROOT/diagnostics/comparison_progress"
+if [[ "$INCLUDE_PROGRESS" == "1" ]]; then
+  render_individual progress "$OUT_ROOT/diagnostics/comparison_progress"
+fi
 
 python3 scripts/plot_fedrl_heterogeneous.py \
   --fed-log-dir "$FED_LOG_DIR" \
@@ -52,7 +55,7 @@ python3 scripts/plot_fedrl_heterogeneous.py \
 
 mkdir -p "$OUT_ROOT/paper_figures" "$OUT_ROOT/tables"
 
-for AXIS in round steps progress; do
+for AXIS in round steps; do
   python3 scripts/plot_fedrl_paper_panels.py \
     --fed-log-dir "$FED_LOG_DIR" \
     --paper-log-dir "$SAC_LOG_DIR" \
@@ -65,6 +68,20 @@ for AXIS in round steps progress; do
     --align-start \
     --envs $ENVS
 done
+
+if [[ "$INCLUDE_PROGRESS" == "1" ]]; then
+  python3 scripts/plot_fedrl_paper_panels.py \
+    --fed-log-dir "$FED_LOG_DIR" \
+    --paper-log-dir "$SAC_LOG_DIR" \
+    --out-file "$OUT_ROOT/paper_figures/comparison_progress.png" \
+    --plot-kind comparison \
+    --x-axis progress \
+    --metric current \
+    --variance "$VARIANCE" \
+    --smooth-window "$SMOOTH_WINDOW" \
+    --align-start \
+    --envs $ENVS
+fi
 
 python3 scripts/plot_fedrl_paper_panels.py \
   --fed-log-dir "$FED_LOG_DIR" \
@@ -101,5 +118,17 @@ fi
 python3 scripts/check_fedrl_convergence.py \
   --log-dirs "${LOG_DIRS[@]}" \
   --out-file "$OUT_ROOT/tables/convergence_report.csv"
+
+python3 scripts/test_fedrl_significance.py \
+  --log-dirs "${LOG_DIRS[@]}" \
+  --out-file "$OUT_ROOT/tables/comparison_wilcoxon.csv" \
+  --plot-kind comparison \
+  --envs $ENVS
+
+python3 scripts/test_fedrl_significance.py \
+  --log-dirs "$FED_LOG_DIR" \
+  --out-file "$OUT_ROOT/tables/ablation_wilcoxon.csv" \
+  --plot-kind ablation \
+  --envs $ENVS
 
 echo "Rendered paper bundle under $OUT_ROOT"

@@ -94,6 +94,7 @@ PLOT_STYLES = {
 
 # Six MuJoCo continuous control tasks (Todorov et al., 2012), Gymnasium *-v2 IDs
 MUJOCO_V2_ENVS = [
+    'HalfCheetah-v2',
     'Swimmer-v2',
     'Hopper-v2',
     'Ant-v2',
@@ -111,6 +112,7 @@ FEDRL_HETEROGENEOUS_ENVS = [
 
 FEDRL_CONTINUOUS_ENVS = [
     'Ant-v5',
+    'HalfCheetah-v5',
     'Pusher-v5',
     'Swimmer-v5',
     'Walker2d-v5',
@@ -185,6 +187,10 @@ def env_run_preset(env_id: str) -> dict:
         'Ant-v5': {
             'population_size': 12, 'num_workers': 3,
             'max_generations': 80, 'max_episode_steps': 1000,
+        },
+        'HalfCheetah-v5': {
+            'population_size': 16, 'num_workers': 3,
+            'max_generations': 100, 'max_episode_steps': 1000,
         },
         'Pusher-v5': {
             'population_size': 12, 'num_workers': 3,

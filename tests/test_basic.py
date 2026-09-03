@@ -55,6 +55,7 @@ def test_ant_v5_continuous_env_and_client_dynamics():
 
 def test_pusher_v5_continuous_env_and_client_dynamics():
     assert 'Pusher-v5' in FED_EVOSAC_ENVS
+    assert 'HalfCheetah-v5' in FED_EVOSAC_ENVS
     info = get_env_info('Pusher-v5')
     assert info['state_dim'] == 23
     assert info['action_dim'] == 7

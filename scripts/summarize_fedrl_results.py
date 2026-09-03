@@ -10,6 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+from scipy.stats import t as student_t
 
 try:
     from scripts.plot_fedrl_heterogeneous import _num
@@ -122,6 +123,21 @@ def _fmt(mean, std):
     return f"{mean:.2f} +/- {std:.2f}"
 
 
+def _ci95_half_width(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size < 2:
+        return float('nan')
+    sem = values.std(ddof=1) / math.sqrt(values.size)
+    return float(student_t.ppf(0.975, values.size - 1) * sem)
+
+
+def _fmt_ci95(mean, half_width):
+    if not math.isfinite(half_width):
+        return f"{mean:.2f} +/- n/a"
+    return f"{mean:.2f} +/- {half_width:.2f}"
+
+
 def _sample_std(values):
     values = np.asarray(values, dtype=float)
     return float(values.std(ddof=1)) if values.size > 1 else 0.0
@@ -172,13 +188,21 @@ def main():
     fields = [
         'env', 'method', 'n',
         'final_current_mean', 'final_current_std', 'final_current',
+        'final_current_ci95_half_width', 'final_current_ci95_lower', 'final_current_ci95_upper',
         'final_best_mean', 'final_best_std', 'final_best',
+        'final_best_ci95_half_width', 'final_best_ci95_lower', 'final_best_ci95_upper',
         'final_forward_return_mean', 'final_forward_return_std',
+        'final_forward_return_ci95_half_width',
         'final_survive_return_mean', 'final_survive_return_std',
+        'final_survive_return_ci95_half_width',
         'final_episode_length_mean', 'final_episode_length_std',
+        'final_episode_length_ci95_half_width',
         'final_x_displacement_mean', 'final_x_displacement_std',
+        'final_x_displacement_ci95_half_width',
         'final_x_velocity_mean', 'final_x_velocity_std',
+        'final_x_velocity_ci95_half_width',
         'max_steps', 'max_round', 'max_wall_time_sec', 'wall_time_sec',
+        'interval',
     ]
     with out_path.open('w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -198,6 +222,8 @@ def main():
             wall_times = np.asarray([v['wall_time_sec'] for v in vals], dtype=float)
             current_std = _sample_std(currents)
             best_std = _sample_std(bests)
+            current_ci95 = _ci95_half_width(currents)
+            best_ci95 = _ci95_half_width(bests)
             wall_time_std = _sample_std(wall_times[np.isfinite(wall_times)])
             row = {
                 'env': env,
@@ -205,19 +231,27 @@ def main():
                 'n': len(vals),
                 'final_current_mean': float(currents.mean()),
                 'final_current_std': current_std,
-                'final_current': _fmt(currents.mean(), current_std),
+                'final_current': _fmt_ci95(currents.mean(), current_ci95),
+                'final_current_ci95_half_width': current_ci95,
+                'final_current_ci95_lower': float(currents.mean() - current_ci95),
+                'final_current_ci95_upper': float(currents.mean() + current_ci95),
                 'final_best_mean': float(bests.mean()),
                 'final_best_std': best_std,
-                'final_best': _fmt(bests.mean(), best_std),
+                'final_best': _fmt_ci95(bests.mean(), best_ci95),
+                'final_best_ci95_half_width': best_ci95,
+                'final_best_ci95_lower': float(bests.mean() - best_ci95),
+                'final_best_ci95_upper': float(bests.mean() + best_ci95),
                 'max_steps': int(np.nanmax(steps)),
                 'max_round': int(np.nanmax(rounds)),
                 'max_wall_time_sec': float(np.nanmax(wall_times)),
                 'wall_time_sec': _fmt(float(np.nanmean(wall_times)), wall_time_std),
+                'interval': 'mean +/- two-sided 95% Student-t CI',
             }
             for key, values in diagnostics.items():
                 finite = values[np.isfinite(values)]
                 row[f'final_{key}_mean'] = float(np.mean(finite)) if finite.size else float('nan')
                 row[f'final_{key}_std'] = _sample_std(finite) if finite.size else float('nan')
+                row[f'final_{key}_ci95_half_width'] = _ci95_half_width(finite)
             writer.writerow(row)
     print(out_path)
 

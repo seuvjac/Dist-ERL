@@ -9,6 +9,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import FuncFormatter
+from scipy.stats import t as student_t
 
 
 def parse_args():
@@ -34,7 +35,7 @@ def parse_args():
     p.add_argument('--metric', default='current', choices=['current', 'candidate', 'best'],
                    help='current uses deployable eval; candidate uses the current training policy; best uses optimistic archive metrics')
     p.add_argument(
-        '--variance', default='seed',
+        '--variance', default='ci95',
         choices=['seed', 'sem', 'ci90', 'ci95', 'eval', 'combined', 'none'],
         help='Uncertainty band: seed std, standard error, 90/95%% CI, eval std, combined std, or none',
     )
@@ -54,6 +55,18 @@ def _num(v):
         return float(v)
     except Exception:
         return np.nan
+
+
+def _ci_multiplier(count, confidence=0.95):
+    """Two-sided Student-t multiplier for each finite seed count."""
+    count = np.asarray(count, dtype=float)
+    multiplier = np.zeros_like(count, dtype=float)
+    valid = count > 1
+    multiplier[valid] = student_t.ppf(
+        0.5 + float(confidence) / 2.0,
+        count[valid] - 1.0,
+    )
+    return multiplier
 
 
 def _display_env(meta):
@@ -436,9 +449,9 @@ def main():
             elif args.variance in ('sem', 'ci90', 'ci95'):
                 s = seed_s / np.sqrt(np.maximum(1, finite_count))
                 if args.variance == 'ci90':
-                    s = 1.645 * s
+                    s = _ci_multiplier(finite_count, 0.90) * s
                 elif args.variance == 'ci95':
-                    s = 1.960 * s
+                    s = _ci_multiplier(finite_count, 0.95) * s
             elif args.variance == 'none':
                 s = np.zeros_like(y)
             else:
@@ -452,7 +465,7 @@ def main():
                     y - s,
                     y + s,
                     color=colors.get(label),
-                    alpha=(0.13 if is_proposed else 0.055) if paper_style
+                    alpha=(0.15 if is_proposed else 0.09) if paper_style
                     else (0.18 if args.style == 'reference' else 0.14),
                     linewidth=0,
                     zorder=2 if is_proposed else 1,
@@ -462,7 +475,7 @@ def main():
                 y,
                 label=label if paper_style else f"{label} (n={len(group)})",
                 color=colors.get(label),
-                linestyle=line_styles.get(label, '-'),
+                linestyle='-' if paper_style else line_styles.get(label, '-'),
                 linewidth=3.35 if paper_style and is_proposed
                 else (2.15 if paper_style else (2.8 if args.style == 'reference' else 2)),
                 solid_capstyle='round',

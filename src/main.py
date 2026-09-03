@@ -43,6 +43,7 @@ from src.worker import RolloutWorker
 FED_EVOFSAC_ENVS = ('CartPole-v1', 'MountainCar-v0', 'Acrobot-v1', 'LunarLander-v3')
 FED_EVOSAC_ENVS = (
     'Ant-v5',
+    'HalfCheetah-v5',
     'Pusher-v5',
     'Swimmer-v5',
     'Reacher-v5',
