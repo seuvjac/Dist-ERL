@@ -100,6 +100,14 @@ def _x_label(axis, align_start=False):
     }[axis]
 
 
+def _panel_title(run):
+    """Use compact task names so multi-column paper panels do not collide."""
+    env = run['env']
+    if env in ('Walker2d-v5', 'Hopper-v5'):
+        return env
+    return run.get('display_env', env)
+
+
 def main():
     args = parse_args()
     _apply_plot_style('paper')
@@ -153,7 +161,7 @@ def main():
                 label=label, zorder=4 if is_proposed else 3,
             )
             handles[label] = line
-        ax.set_title(env_runs[0].get('display_env', env), loc='left', pad=10)
+        ax.set_title(_panel_title(env_runs[0]), loc='left', pad=10)
         if args.x_axis == 'steps':
             ax.set_xlabel('Environment interactions ($10^6$)')
             ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f'{value / 1e6:g}'))
