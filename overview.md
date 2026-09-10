@@ -342,8 +342,9 @@ HalfCheetah-v5
 
 为降低训练方差而不改变 FedEvoSAC 的核心结构，新版增加以下约束：
 
-- EA population 使用以标准 SAC actor 为中心的 `anchor_antithetic` 初始化；训练 seed 仍分别决定各 run 的 anchor 和随机过程，不固定成同一初始网络；
-- EA mutation 使用 layer-RMS 尺度并允许改变 bias，避免接近零的参数几乎无法变异；确定性 EA fitness 不依赖 `actor.log_std`，因此交叉和变异排除该分支，防止中性漂移；
+- Walker2d/Hopper 的 Full 已经表现为低方差，因此继续使用回退版原始 Gaussian population 与 element-wise mutation；不对已经稳定的主方法套用新的 EA 超参数；
+- Swimmer/HalfCheetah 使用以标准 SAC actor 为中心的 `anchor_antithetic` 初始化；训练 seed 仍分别决定各 run 的 anchor 和随机过程，不固定成同一初始网络；
+- Swimmer/HalfCheetah 的 EA mutation 使用 layer-RMS 尺度并允许改变 bias，避免接近零的参数几乎无法变异；确定性 EA fitness 不依赖 `actor.log_std`，因此交叉和变异排除该分支，防止中性漂移；
 - FedSAC baseline 的 client score EMA 修正为 `beta * old + (1-beta) * reward`，避免旧实现把分数放大约十倍、令 softmax 退化为不稳定的 winner-take-all；
 - baseline 与 FedEvoSAC 均在相同异质 client suite 上进行部署验证，不再出现“异质训练、同质验证”的评估错位；
 - baseline 提高 replay-data 对应的 SAC 更新量，并降低 actor learning rate，使 HalfCheetah、Walker2d 和 Hopper 不再因更新预算过低而在 seed 间随机地学会或失败；
@@ -365,7 +366,7 @@ Walker2d 的 `relative_gain` 聚合曾经过于接近 uniform averaging，导致
 
 Swimmer 对早期 federation 较敏感。当前只在 `Swimmer-v5` 上启用 warm-up：第一次 federated aggregation 使用 `batch_zscore` 并跳过 injection；第二次起恢复 `relative_gain`、`fed_score_scale=4` 和正常 injection。`FedEvoSAC-raw_softmax` 消融不使用该 warm-up 和 score scaling，保持原始 raw reward softmax 路径。
 
-当前三 seed 稳定化横向实验使用 `scripts/run_rollback_stabilized_3seed.sh`。它只生成 comparison 的 rounds/steps 图与汇总表，采用双侧 95% Student-t CI，不运行或筛选消融实验。
+当前三 seed 稳定化横向实验使用 `scripts/run_rollback_stabilized_3seed_v2.sh`。它复用未修改且低方差的 Walker2d/Hopper Full 数据，只重跑受代码修正影响的基线，并重跑 Swimmer/HalfCheetah 全部方法。脚本只生成 comparison 的 rounds/steps 图与汇总表，采用双侧 95% Student-t CI，不运行或筛选消融实验。
 
 Reacher 已从主环境中移出。它的短 horizon 和 dense distance reward 更适合作调试 SAC 稳定性，不适合作为 EA+FedSAC 的核心证据：FedEvoSAC 的 population search 优势容易被短任务的快速局部优化掩盖，且 evaluation variance 会显著影响结论。当前改用 `Walker2d-v5`，它同样是 MuJoCo 连续控制，但 horizon 更长、动作维度更高、步态探索更依赖 actor 多样性，更适合检验 EA + federated SAC。Hopper 的 `1000+` 回报在 MuJoCo Hopper 中并非异常上界，但仍偏中等，因此 Hopper 保留为可继续提分的 locomotion 任务。
 

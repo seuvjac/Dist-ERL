@@ -217,7 +217,7 @@ def main():
     evaluation_seed = (
         args.evaluation_seed_base
         if args.evaluation_seed_base >= 0
-        else args.seed + 70_000_003
+        else args.seed + 50_000_003
     )
     global_eval, global_eval_std, initial_eval_steps = _evaluate(
         policies, args.env, args.max_episode_steps, evaluation_seed,
