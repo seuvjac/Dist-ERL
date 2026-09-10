@@ -1,7 +1,7 @@
 # FedEvoSAC / Dist-ERL
 
 > 最后核对：2026-09-03。当前主线是连续动作 `FedEvoSAC`。新版正式协议使用
-> Walker2d-Locomotion、Hopper-Locomotion、Ant-v5、HalfCheetah-v5 和 Swimmer-v5，
+> Walker2d-Locomotion、Hopper-Locomotion、HalfCheetah-v5 和 Swimmer-v5，
 > 输出 current return 对 communication rounds / counted interactions 的均值曲线与双侧
 > 95% Student-t CI，不再生成 normalized training-progress 图。正式统计使用运行前固定的
 > 30 个 held-out seed；禁止按 Full 得分事后筛选 seed。5 个运行前固定 seed 只允许用于
@@ -14,14 +14,13 @@
 ```text
 Walker2d-Locomotion (基于 Walker2d-v5)
 Hopper-Locomotion (基于 Hopper-v5)
-Ant-v5
 HalfCheetah-v5
 Swimmer-v5
 ```
 
 每个 client 拥有自己的私有环境、私有 replay buffer 和本地 SAC learner。client 之间不共享 trajectory，服务器只能接收 actor 参数、reward / fitness 等标量统计信息；critic、target critic、temperature 和 replay buffer 全部留在本地。
 
-2026-09-03 协议重新纳入 Ant、HalfCheetah 和 Swimmer，用于扩大任务覆盖；这不会抹去旧实验发现的风险。Swimmer 的历史 seed 方差较大，Ant 的默认 healthy reward 可能形成生存捷径，HalfCheetah 的高维 actor 搜索可能收敛较慢，因此三者必须完整报告全部预注册 seed、95% CI、收敛率和 locomotion diagnostics，不能只展示有利运行。Walker2d 和 Hopper 启用 `env_params_only` dynamics heterogeneity，强度分别为 `0.30` 和 `0.25`；Ant、HalfCheetah 和 Swimmer 分别使用 `0.15`、`0.15` 和 `0.12`。`Walker2d-Locomotion` 与 `Hopper-Locomotion` 是显式 reward 变体，不与 Gymnasium 默认成绩直接混合比较。
+Ant pilot 显示其默认 healthy reward 容易形成接近 1000 分的生存捷径，而 FedEvoSAC 未表现出优势，因此 Ant 已从当前正式环境集合和默认脚本中移除。Swimmer 的历史 seed 方差较大，HalfCheetah 的高维 actor 搜索可能收敛较慢，两者必须完整报告全部预注册 seed、95% CI、收敛率和 locomotion diagnostics，不能只展示有利运行。Walker2d 和 Hopper 启用 `env_params_only` dynamics heterogeneity，强度分别为 `0.30` 和 `0.25`；HalfCheetah 和 Swimmer 分别使用 `0.15` 和 `0.12`。`Walker2d-Locomotion` 与 `Hopper-Locomotion` 是显式 reward 变体，不与 Gymnasium 默认成绩直接混合比较。
 
 异质性来自不同 client 的局部 MDP 扰动：
 
@@ -29,7 +28,6 @@ Swimmer-v5
 |------|----------|----------------------|
 | `Walker2d-Locomotion` | continuous | 基于 `Walker2d-v5`；gravity、左右腿质量/惯量、左右关节阻尼、脚底摩擦、左右执行器 gear；`healthy_reward=0.05`、`forward_reward_weight=1.0` |
 | `Hopper-Locomotion` | continuous | 基于 `Hopper-v5`；gravity、body mass、joint damping、geom friction；`healthy_reward=0.05`、`forward_reward_weight=1.0` |
-| `Ant-v5` | continuous | gravity、body mass、joint damping、geom friction；`0.15 / env_params_only` |
 | `HalfCheetah-v5` | continuous | gravity、body mass、joint damping、geom friction；`0.15 / env_params_only` |
 | `Swimmer-v5` | continuous | body mass、joint damping、geom friction；`0.12 / env_params_only` |
 
@@ -64,7 +62,6 @@ FedEvoSAC
 ```text
 Walker2d-Locomotion (基于 Walker2d-v5)
 Hopper-Locomotion (基于 Hopper-v5)
-Ant-v5
 HalfCheetah-v5
 Swimmer-v5
 ```
@@ -222,16 +219,16 @@ FedEvoSAC 聚合的是 client 上传的 actor 参数，不聚合 trajectory，�
 
 | 机制 | 当前参数 | 作用 |
 |------|----------|------|
-| 聚合周期 | Walker2d/Hopper/Ant/HalfCheetah/Swimmer 为 `5/4/4/4/2` 代 | 在长 horizon 任务中控制 SAC refinement 与 EA 评估的预算占比 |
+| 聚合周期 | Walker2d/Hopper/HalfCheetah/Swimmer 为 `5/4/4/2` 代 | 在长 horizon 任务中控制 SAC refinement 与 EA 评估的预算占比 |
 | score normalization | 五个环境均为 `relative_gain` | 按各 client 相对自身历史的提升计算权重，降低 reward scale 差异的直接影响 |
-| normalized temperature | Walker2d/Hopper/Ant/HalfCheetah/Swimmer 为 `8/1/60/4/4` | 环境维度和 reward range 不同，因此预注册环境级温度，不在 seed 结果出现后修改 |
-| score scale | Walker2d/Hopper/Ant/HalfCheetah/Swimmer 为 `8/1/4/4/4` | 在保持归一化的同时调节 client 权重区分度 |
+| normalized temperature | Walker2d/Hopper/HalfCheetah/Swimmer 为 `8/1/4/4` | 环境维度和 reward range 不同，因此预注册环境级温度，不在 seed 结果出现后修改 |
+| score scale | Walker2d/Hopper/HalfCheetah/Swimmer 为 `8/1/4/4` | 在保持归一化的同时调节 client 权重区分度 |
 | reward scale EMA | `--fed-score-ema-beta 0.90` | 为每个正式环境维护每个 client 的 reward baseline / scale |
 | federation warm-up | 前两次聚合使用 warm-up score，并跳过 injection | 避免本地 critic 尚未校准时破坏 archive elite |
 | raw softmax 敏感性对照 | `--fed-ablation raw_softmax` | 保留原始 reward softmax，用于单独筛选聚合策略，不进入模块消融图 |
 | 低分过滤 | `--fed-min-client-score-quantile 0.25` | 丢弃低质量 actor update；uniform 消融不执行该过滤 |
-| delta clipping | Walker2d/Hopper/Ant/HalfCheetah/Swimmer 为 `4/0.5/4/1/3` | 限制 client update 的全局 L2 参数步长 |
-| soft injection | 环境级低噪声、受限 blend，Ant/HalfCheetah/Swimmer 每次最多迁移 1 个个体 | 将通过独立验证的聚合 actor 注入 EA，同时避免复制过多导致种群塌缩 |
+| delta clipping | Walker2d/Hopper/HalfCheetah/Swimmer 为 `4/0.5/1/3` | 限制 client update 的全局 L2 参数步长 |
+| soft injection | 环境级低噪声、受限 blend，HalfCheetah/Swimmer 每次最多迁移 1 个个体 | 将通过独立验证的聚合 actor 注入 EA，同时避免复制过多导致种群塌缩 |
 
 聚合形式是以当前 best actor 为中心的 delta aggregation：
 
@@ -331,7 +328,6 @@ BUDGET_PRESET=converged
 ```text
 Walker2d-Locomotion (脚本参数仍为 Walker2d-v5)
 Hopper-Locomotion (脚本参数仍为 Hopper-v5)
-Ant-v5
 HalfCheetah-v5
 Swimmer-v5
 ```
@@ -632,7 +628,7 @@ logs/experiments/fedevosac_20x2_converged_20260714/
 
 已完成：
 
-- 连续正式环境主线：`Walker2d-Locomotion`、`Hopper-Locomotion`、`Ant-v5`、`HalfCheetah-v5`、`Swimmer-v5`；
+- 连续正式环境主线：`Walker2d-Locomotion`、`Hopper-Locomotion`、`HalfCheetah-v5`、`Swimmer-v5`；Ant 仅保留历史 pilot，不进入正式对比；
 - `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；

@@ -16,7 +16,7 @@ if ! python3 -c 'import ray, gymnasium, torch' >/dev/null 2>&1; then
   export PATH="$(dirname "$EXPERIMENT_PYTHON"):$PATH"
 fi
 
-ENVS=${ENVS:-"Walker2d-v5 Hopper-v5 Ant-v5 HalfCheetah-v5 Swimmer-v5"}
+ENVS=${ENVS:-"Walker2d-v5 Hopper-v5 HalfCheetah-v5 Swimmer-v5"}
 SEEDS=${SEEDS:-"0 1"}
 FED_VARIANTS=${FED_VARIANTS:-"full"}
 SAC_BASELINES=${SAC_BASELINES-"fedavg_sac fedbest_sac fedsoftmax_sac_noea fedmedian_sac"}

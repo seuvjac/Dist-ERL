@@ -11,7 +11,7 @@ export MPLBACKEND=${MPLBACKEND:-Agg}
 export RAY_local_fs_capacity_threshold=${RAY_local_fs_capacity_threshold:-0.99}
 
 EXPERIMENT_ID=${EXPERIMENT_ID:-"fedevosac_sensitivity_5seed_$(date +%Y%m%d)"}
-ENVS=${ENVS:-"Walker2d-v5 Hopper-v5 Ant-v5 HalfCheetah-v5 Swimmer-v5"}
+ENVS=${ENVS:-"Walker2d-v5 Hopper-v5 HalfCheetah-v5 Swimmer-v5"}
 SEEDS=${SEEDS:-"200 201 202 203 204"}
 LEVELS=${LEVELS:-"0.0 0.075 0.15 0.225 0.30"}
 TARGET_ENV_STEPS=${TARGET_ENV_STEPS:-1200000}
