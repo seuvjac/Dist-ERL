@@ -85,6 +85,22 @@ def parse_args():
                         help='Fraction of columns mutated per action row (ERL-Re² beta)')
     parser.add_argument('--ea-prob-reset-and-super', type=float, default=0.05,
                         help='Prob of drastic / reset mutation (ERL-Re² prob_reset_and_sup)')
+    parser.add_argument('--ea-init-mode', type=str, default='gaussian',
+                        choices=['gaussian', 'anchor_perturb', 'anchor_antithetic'],
+                        help='EA population initialization strategy')
+    parser.add_argument('--ea-init-seed', type=int, default=-1,
+                        help='Optional fixed EA initialization seed; -1 follows the run seed')
+    parser.add_argument('--ea-init-noise-scale', type=float, default=0.05,
+                        help='Relative layer-scale noise around the SAC actor anchor')
+    parser.add_argument('--ea-mutation-scale-mode', type=str, default='element',
+                        choices=['element', 'layer_rms'],
+                        help='Scale mutations per parameter or by actor-layer RMS')
+    parser.add_argument('--ea-mutation-scale-floor', type=float, default=1e-3,
+                        help='Minimum layer scale used by layer-RMS mutation')
+    parser.add_argument('--ea-mutate-bias', action='store_true',
+                        help='Include actor biases in EA mutation')
+    parser.add_argument('--ea-freeze-sac-log-std', action='store_true',
+                        help='Exclude SAC log-std parameters from deterministic EA operators')
     parser.add_argument('--num-workers', type=int, default=4, help='Number of rollout workers')
     parser.add_argument('--num-clients', type=int, default=4, help='Number of federated RL clients')
     parser.add_argument('--client-fraction', type=float, default=1.0,
@@ -164,6 +180,8 @@ def parse_args():
     parser.add_argument('--sync-interval', type=int, default=20, help='RL-EA Re2 sync interval for erl_re2')
     parser.add_argument('--eval-interval', type=int, default=1, help='Evaluation interval in generations')
     parser.add_argument('--eval-episodes', type=int, default=10, help='Number of episodes for evaluation')
+    parser.add_argument('--evaluation-seed-base', type=int, default=-1,
+                        help='Common archive-validation seed; -1 derives it from the run seed')
     parser.add_argument('--rl-rollouts', type=int, default=2, help='RL rollout episodes per generation (standard ERL)')
     parser.add_argument('--rl-updates', type=int, default=10, help='Gradient steps per generation/sync')
     parser.add_argument('--elite-seeds', type=int, default=5, help='Top-k elite seeds for reproduction')
@@ -279,6 +297,14 @@ def _setup_local_logger(args):
         'fed_inject_margin': args.fed_inject_margin,
         'fed_injection_warmup_rounds': args.fed_injection_warmup_rounds,
         'ea_weight_clip': args.ea_weight_clip,
+        'ea_init_mode': args.ea_init_mode,
+        'ea_init_seed': args.ea_init_seed,
+        'ea_init_noise_scale': args.ea_init_noise_scale,
+        'ea_mutation_scale_mode': args.ea_mutation_scale_mode,
+        'ea_mutation_scale_floor': args.ea_mutation_scale_floor,
+        'ea_mutate_bias': args.ea_mutate_bias,
+        'ea_freeze_sac_log_std': args.ea_freeze_sac_log_std,
+        'evaluation_seed_base': args.evaluation_seed_base,
         'elite_archive_size': args.elite_archive_size,
         'elite_archive_restore_copies': args.elite_archive_restore_copies,
         'archive_eval_candidates': args.archive_eval_candidates,
@@ -426,6 +452,12 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         'mutation_beta_frac': args.ea_mutation_beta_frac,
         'prob_reset_and_super': args.ea_prob_reset_and_super,
         'actor_prefix': 'actor.',
+        'actor_exclude_substrings': (
+            ('actor.log_std.',) if args.ea_freeze_sac_log_std else ()
+        ),
+        'mutation_scale_mode': args.ea_mutation_scale_mode,
+        'mutation_scale_floor': args.ea_mutation_scale_floor,
+        'mutate_bias': args.ea_mutate_bias,
         'weight_clip': args.ea_weight_clip,
     }
     manager = EAManager.remote(
@@ -435,10 +467,16 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
         ga_config,
         args.seed,
     )
+    template_seed = args.ea_init_seed if args.ea_init_seed >= 0 else args.seed
     template = build_model_template(
         env_info['state_dim'], env_info['action_dim'], algorithm=args.algorithm,
-        discrete=hasattr(env_info.get('action_space'), 'n'))
-    ray.get(manager.initialize_population.remote(template))
+        discrete=hasattr(env_info.get('action_space'), 'n'), seed=template_seed)
+    ray.get(manager.initialize_population.remote(
+        template,
+        args.ea_init_mode,
+        args.ea_init_seed if args.ea_init_seed >= 0 else None,
+        args.ea_init_noise_scale,
+    ))
 
     clients = [
         FederatedClient.remote(
@@ -506,7 +544,11 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
 
         archive_candidates = ray.get(manager.get_elite_individuals.remote(
             min(args.archive_eval_candidates, args.population_size)))
-        archive_seed = args.seed + 50_000_003
+        archive_seed = (
+            args.evaluation_seed_base
+            if args.evaluation_seed_base >= 0
+            else args.seed + 50_000_003
+        )
         archive_rows = []
         archive_eval_steps = 0
         for candidate in archive_candidates:

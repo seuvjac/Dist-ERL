@@ -8,6 +8,7 @@
 Swimmer-v5
 Walker2d-v5
 Hopper-v5
+HalfCheetah-v5
 ```
 
 每个 client 拥有自己的私有环境、私有 replay buffer 和本地 SAC learner。client 之间不共享 trajectory，服务器只能接收 actor 参数、reward / fitness 等标量统计信息；critic、target critic、temperature 和 replay buffer 全部留在本地。
@@ -19,6 +20,7 @@ Hopper-v5
 | `Swimmer-v5` | continuous | gravity、body mass、joint damping、geom friction、reward scale、observation/action perturbation |
 | `Walker2d-v5` | continuous | gravity、body mass、joint damping、geom friction、reward scale、observation/action perturbation |
 | `Hopper-v5` | continuous | gravity、body mass、joint damping、geom friction、reward scale、observation/action perturbation |
+| `HalfCheetah-v5` | continuous | gravity、body mass、joint damping、geom friction、reward scale、observation/action perturbation |
 
 当前在每个原始环境上定义三种异质联邦场景：
 
@@ -52,6 +54,7 @@ FedEvoSAC
 Swimmer-v5
 Walker2d-v5
 Hopper-v5
+HalfCheetah-v5
 ```
 
 连续主对照组：
@@ -305,38 +308,45 @@ FedAvg-DQN
 ./run_continuous_fedevosac_suite.sh
 ```
 
-当前三环境主实验使用按环境设置的异质性，并以两个独立 seed 为一个最小统计单元：
+当前方差稳定化实验使用按环境设置的异质性，固定运行三个独立 seed：
 
 ```text
 CLIENT_HETEROGENEITY=0.0
 CLIENT_HETEROGENEITY_MODE=none
 NUM_WORKERS=3
-SEEDS="0 1"
+SEEDS="0 1 2"
 BUDGET_PRESET=converged
 ```
 
-默认连续环境：
+默认连续环境（Ant 已移出）：
 
 ```text
 Swimmer-v5
 Walker2d-v5
 Hopper-v5
+HalfCheetah-v5
 ```
 
-HalfCheetah 已从主实验中移除。旧 `perenv_tuned_s0` 中 Swimmer 达到 `242.70`，但三 seed 结果为 `111.91 +/- 92.52`；逐行检查日志后发现，seed 0 找到高回报 actor，而 seed 1/2 停在约 `50/44`，且三个 run 的 `migrated` 都为 `0`。因此旧好结果主要来自一次成功的 EA 搜索，不足以证明稳定性。新协议不把方差仅当成画图问题，而是同时修正远程 actor 随机种子、停滞恢复、SAC refinement 和训练预算。
+旧 `perenv_tuned_s0` 中 Swimmer 达到 `242.70`，但三 seed 结果为 `111.91 +/- 92.52`；逐行检查日志后发现，不同 seed 的 EA 搜索会落入明显不同的行为盆地。因此新协议不把方差仅当成画图问题，而是直接约束种群初始化、变异尺度、验证场景和 SAC 更新强度。HalfCheetah 保留用于检验长 horizon SAC 学习，但只有在四个 SAC baseline 都出现有效学习曲线时才可进入论文结果。
 
-当前三环境协议因此改为：
+当前四环境协议为：
 
 | 环境 | horizon | FedEvoSAC population | 联邦频率 | client SAC updates | archive validation |
 |------|---------|----------------------|----------|--------------------|-------------------|
 | `Swimmer-v5` | `1000` | `10` | 每 2 代 | `64`，前 48 次 critic-only，actor lr `3e-5` | top-2 candidates x 1 episode |
 | `Walker2d-v5` | `1000` | `12` | 每 5 代 | `6` | top-2 candidates x 1 episode |
 | `Hopper-v5` | `1000` | `12` | 每 4 代 | `8` | top-3 candidates x 2 episodes |
+| `HalfCheetah-v5` | `1000` | `12` | 每 4 代 | `24` | top-2 candidates x 2 episodes |
 
-同一环境内所有算法使用相同真实交互预算：三个环境均为 `1,200,000` steps。训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 全部计入预算；提前达到稳定回报的算法仍跑满预算，画图时保持最后一个当前策略回报。所有 EA 个体使用同代 common seeds，archive 和聚合 actor 使用独立固定 validation seeds。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement。
+同一环境内所有算法使用相同真实交互预算：四个环境均为 `1,200,000` steps。训练 rollout、EA evaluation、archive validation 和聚合 candidate validation 全部计入预算；提前达到稳定回报的算法仍跑满预算，画图时保持最后一个当前策略回报。所有方法使用共同的固定 validation seed suite，训练 seed 仍保持独立。FedEvoSAC 的基本原则是：长 horizon locomotion 任务中以 EA actor population 负责全局探索，SAC/federation 低频辅助 refinement。
 
 为降低训练方差而不改变 FedEvoSAC 的核心结构，新版增加以下约束：
 
+- EA population 使用以标准 SAC actor 为中心的 `anchor_antithetic` 初始化；训练 seed 仍分别决定各 run 的 anchor 和随机过程，不固定成同一初始网络；
+- EA mutation 使用 layer-RMS 尺度并允许改变 bias，避免接近零的参数几乎无法变异；确定性 EA fitness 不依赖 `actor.log_std`，因此交叉和变异排除该分支，防止中性漂移；
+- FedSAC baseline 的 client score EMA 修正为 `beta * old + (1-beta) * reward`，避免旧实现把分数放大约十倍、令 softmax 退化为不稳定的 winner-take-all；
+- baseline 与 FedEvoSAC 均在相同异质 client suite 上进行部署验证，不再出现“异质训练、同质验证”的评估错位；
+- baseline 提高 replay-data 对应的 SAC 更新量，并降低 actor learning rate，使 HalfCheetah、Walker2d 和 Hopper 不再因更新预算过低而在 seed 间随机地学会或失败；
 - `EAManager` 和每个 Ray `FederatedClient` 显式接收实验 seed；manager 持有私有 Python/NumPy RNG，并将其传入每一代交叉、变异、immigrant 和 injection，避免 `erl_re2_epoch()` 每代临时创建未受控随机源；
 - archive 连续若干代未达到最小增益时，保留 archive elite，只重置底部 `25%` 个体并增强中部个体变异；Swimmer patience 为 `4` 代，Walker2d/Hopper 为 `8` 代；
 - Swimmer 每 2 代进行一次联邦 refinement，使用更小的 actor learning rate；每次先训练 critic，再做少量 actor 更新，第一次聚合只 warm-up，从第二次开始允许通过独立验证的 actor 注入；
@@ -354,6 +364,8 @@ Walker2d 的 `relative_gain` 聚合曾经过于接近 uniform averaging，导致
 | `Hopper-v5` | `0.25` | `env_params_only` | 使用 mild dynamics heterogeneity，避免 reward-scale 引入过大的 eval 方差 |
 
 Swimmer 对早期 federation 较敏感。当前只在 `Swimmer-v5` 上启用 warm-up：第一次 federated aggregation 使用 `batch_zscore` 并跳过 injection；第二次起恢复 `relative_gain`、`fed_score_scale=4` 和正常 injection。`FedEvoSAC-raw_softmax` 消融不使用该 warm-up 和 score scaling，保持原始 raw reward softmax 路径。
+
+当前三 seed 稳定化横向实验使用 `scripts/run_rollback_stabilized_3seed.sh`。它只生成 comparison 的 rounds/steps 图与汇总表，采用双侧 95% Student-t CI，不运行或筛选消融实验。
 
 Reacher 已从主环境中移出。它的短 horizon 和 dense distance reward 更适合作调试 SAC 稳定性，不适合作为 EA+FedSAC 的核心证据：FedEvoSAC 的 population search 优势容易被短任务的快速局部优化掩盖，且 evaluation variance 会显著影响结论。当前改用 `Walker2d-v5`，它同样是 MuJoCo 连续控制，但 horizon 更长、动作维度更高、步态探索更依赖 actor 多样性，更适合检验 EA + federated SAC。Hopper 的 `1000+` 回报在 MuJoCo Hopper 中并非异常上界，但仍偏中等，因此 Hopper 保留为可继续提分的 locomotion 任务。
 
@@ -494,15 +506,15 @@ python -m src.main \
 
 这种主图/补充图分层与 FRL 文献的常见结构一致。[Federated Reinforcement Learning with Environment Heterogeneity](https://proceedings.mlr.press/v151/jin22a.html) 在复杂任务中画 averaged return vs episodes/frames，并以均值和 `1.65 x standard error` 阴影展示不确定性，同时单独研究 local-update interval 对通信频率的影响；[Federated Reinforcement Learning: Linear Speedup Under Markovian Sampling](https://proceedings.mlr.press/v162/khodadadian22a.html) 则把 environment iterations/sample complexity 与 communication cost 分开分析。本项目因此输出三环境横向 panel：round 是 main figure，steps 是 supplementary evidence，progress 是 diagnostics。旧日志没有 `communication_round` 时绘图器会回退到 `generation`，仅用于历史图兼容；新实验不使用该回退口径。
 
-新图报告 current policy 的跨 seed 均值和 90% normal-approximation CI（样本标准差 `ddof=1`，阴影为 `1.645 x standard error`），不混入 archive-best 曲线；原始每 seed CSV、seed standard deviation 和无方差图仍保留，可复核置信带。单个 repeat 只有两个 seed，其区间只作运行诊断；正式 aggregate 使用 40 个独立 seed。平滑只作用于显示曲线，不改 summary CSV。每个 run 额外生成 `convergence_report.csv`：最后 6 个评估点的增益和范围必须落在绝对/相对容差内，未通过者不能在论文中标为 converged。
+当前三 seed 稳定化图报告 current policy 的跨 seed 均值和双侧 95% Student-t CI，不混入 archive-best 曲线。原始每 seed CSV 和样本标准差均保留；平滑只作用于显示曲线，不改 summary CSV。由于 `n=3` 的 t 临界值较大，只有降低真实跨 seed 标准差才能明显收窄阴影，不能通过绘图参数掩盖。
 
-最终表格至少报告 `Final return mean +/- std`、`Best return mean +/- std`、`max_steps`、`max_round`、`wall_time_sec` 和 convergence 状态。当前连续证据来自 `Swimmer-v5`、`Walker2d-v5` 和 `Hopper-v5`。
+最终表格至少报告 `Final return mean +/- 95% CI`、样本标准差、`Best return mean +/- 95% CI`、`max_steps`、`max_round`、`wall_time_sec` 和 convergence 状态。当前候选环境为 `Swimmer-v5`、`Walker2d-v5`、`Hopper-v5` 和 `HalfCheetah-v5`。
 
 ## 12. 当前实现状态
 
 已完成：
 
-- 连续环境主线：`Swimmer-v5`、`Walker2d-v5`、`Hopper-v5`；
+- 连续环境主线：`Swimmer-v5`、`Walker2d-v5`、`Hopper-v5`、`HalfCheetah-v5`；Ant 已移出；
 - `SACPolicy`：tanh Gaussian actor、twin critics、target critics、learnable alpha；
 - continuous SAC federated baselines：`FedAvg-SAC`、`FedBest-SAC`、`FedSoftmax-SAC-noEA`、`RobustFed-SAC-Median`；
 - EA genotype actor-only；

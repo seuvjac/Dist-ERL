@@ -29,10 +29,22 @@ class Er2GaConfig:
     super_mut_strength: float = 10.0
     prob_reset_and_super: float = 0.05
     actor_prefix: str = 'actor.'
+    actor_exclude_substrings: Tuple[str, ...] = ()
+    mutation_scale_mode: str = 'element'
+    mutation_scale_floor: float = 1e-3
+    mutate_bias: bool = False
 
 
-def _actor_keys(weights: Dict[str, np.ndarray], prefix: str) -> List[str]:
-    return sorted(k for k in weights if k.startswith(prefix))
+def _actor_keys(
+    weights: Dict[str, np.ndarray],
+    prefix: str,
+    exclude_substrings: Tuple[str, ...] = (),
+) -> List[str]:
+    return sorted(
+        key for key in weights
+        if key.startswith(prefix)
+        and not any(token in key for token in exclude_substrings)
+    )
 
 
 def clone_individual(master: Individual, replacee: Individual) -> None:
@@ -59,12 +71,13 @@ def selection_tournament(index_rank: np.ndarray, num_offsprings: int,
 
 
 def b_crossover_inplace(weights1: Dict[str, np.ndarray], weights2: Dict[str, np.ndarray],
-                        prefix: str = 'actor.', rng: Optional[random.Random] = None) -> None:
+                        prefix: str = 'actor.', rng: Optional[random.Random] = None,
+                        exclude_substrings: Tuple[str, ...] = ()) -> None:
     """
     Row-wise crossover on 2D actor weight matrices (ERL-Re2 crossover_inplace).
     """
     rng = rng or random.Random()
-    keys = _actor_keys(weights1, prefix)
+    keys = _actor_keys(weights1, prefix, exclude_substrings)
     weight_keys = [k for k in keys if weights1[k].ndim == 2 and 'weight' in k]
 
     for wkey in weight_keys:
@@ -95,7 +108,25 @@ def b_mutate_inplace(weights: Dict[str, np.ndarray], cfg: Er2GaConfig,
     rng = rng or random.Random()
     super_mut_prob = cfg.prob_reset_and_super
     reset_prob = min(1.0, super_mut_prob + cfg.prob_reset_and_super)
-    keys = _actor_keys(weights, cfg.actor_prefix)
+    keys = _actor_keys(
+        weights, cfg.actor_prefix, cfg.actor_exclude_substrings)
+
+    def mutate_value(value: float, event: float, layer_rms: float) -> float:
+        if cfg.mutation_scale_mode == 'layer_rms':
+            base_scale = max(float(cfg.mutation_scale_floor), layer_rms)
+            minor_scale = cfg.mut_strength * base_scale
+            super_scale = cfg.super_mut_strength * base_scale
+            reset_scale = base_scale
+        else:
+            magnitude = abs(float(value))
+            minor_scale = cfg.mut_strength * magnitude + 1e-8
+            super_scale = cfg.super_mut_strength * magnitude + 1e-8
+            reset_scale = 1.0
+        if event < super_mut_prob:
+            return float(value) + rng.gauss(0, super_scale)
+        if event < reset_prob:
+            return rng.gauss(0, reset_scale)
+        return float(value) + rng.gauss(0, minor_scale)
 
     for key in keys:
         W = weights[key]
@@ -104,21 +135,23 @@ def b_mutate_inplace(weights: Dict[str, np.ndarray], cfg: Er2GaConfig,
         ssne_prob = rng.random() * 2.0
         if ssne_prob >= cfg.mutation_alpha:
             continue
+        layer_rms = float(np.sqrt(np.mean(np.square(W, dtype=np.float64))))
         num_rows = W.shape[0]
         n_cols = max(1, int(W.shape[1] * cfg.mutation_beta_frac))
+        bkey = key.replace('weight', 'bias')
+        bias = weights.get(bkey)
         for row in range(num_rows):
             if rng.random() >= cfg.mutation_alpha:
                 continue
             col_indices = rng.sample(range(W.shape[1]), min(n_cols, W.shape[1]))
             r = rng.random()
             for col in col_indices:
-                if r < super_mut_prob:
-                    W[row, col] += rng.gauss(0, cfg.super_mut_strength * abs(W[row, col]) + 1e-8)
-                elif r < reset_prob:
-                    W[row, col] = rng.gauss(0, 1)
-                else:
-                    W[row, col] += rng.gauss(0, cfg.mut_strength * abs(W[row, col]) + 1e-8)
+                W[row, col] = mutate_value(W[row, col], r, layer_rms)
+            if cfg.mutate_bias and bias is not None and row < len(bias):
+                bias[row] = mutate_value(bias[row], r, layer_rms)
             np.clip(W[row, :], -1e6, 1e6, out=W[row, :])
+            if cfg.mutate_bias and bias is not None and row < len(bias):
+                bias[row] = np.clip(bias[row], -1e6, 1e6)
 
 
 def erl_re2_epoch(population: List[Individual], cfg: Er2GaConfig,
@@ -161,7 +194,8 @@ def erl_re2_epoch(population: List[Individual], cfg: Er2GaConfig,
         clone_individual(elite_parent, population[i])
         clone_individual(winner_parent, population[j])
         b_crossover_inplace(population[i].weights, population[j].weights,
-                            prefix=cfg.actor_prefix, rng=rng)
+                            prefix=cfg.actor_prefix, rng=rng,
+                            exclude_substrings=cfg.actor_exclude_substrings)
 
     for idx in range(n):
         if idx not in new_elitists:

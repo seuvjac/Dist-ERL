@@ -41,6 +41,8 @@ def parse_args():
     p.add_argument('--batch-size', type=int, default=128)
     p.add_argument('--buffer-size', type=int, default=200000)
     p.add_argument('--lr', type=float, default=3e-4)
+    p.add_argument('--actor-lr', type=float, default=0.0,
+                   help='Actor learning rate; <=0 uses --lr.')
     p.add_argument('--gamma', type=float, default=0.99)
     p.add_argument('--tau', type=float, default=0.005)
     p.add_argument('--client-heterogeneity', type=float, default=0.6)
@@ -50,6 +52,8 @@ def parse_args():
                             'reward_scale_only', 'env_params_reward_scale'])
     p.add_argument('--eval-interval', type=int, default=5)
     p.add_argument('--eval-episodes', type=int, default=3)
+    p.add_argument('--evaluation-seed-base', type=int, default=-1,
+                   help='Common validation seed; -1 derives it from the run seed.')
     p.add_argument('--log-dir', default='logs/logs_sac_continuous')
     p.add_argument('--exp-name', default=None)
     p.add_argument('--baseline-mode', default='independent_sac',
@@ -142,14 +146,22 @@ def _rollout(policy, env_name, max_steps, seed, client_id, heterogeneity, hetero
     return total, transitions, len(transitions)
 
 
-def _evaluate(policies, env_name, max_steps, seed, episodes):
+def _evaluate(
+    policies,
+    env_name,
+    max_steps,
+    seed,
+    episodes,
+    heterogeneity,
+    heterogeneity_mode,
+):
     rewards = []
     total_steps = 0
     for wid, policy in enumerate(policies):
         for ep in range(episodes):
             reward, _, steps = _rollout(
-                policy, env_name, max_steps, seed + wid * 1000 + ep,
-                wid, 0.0, 'none', train=False)
+                policy, env_name, max_steps, seed + wid * 10007 + ep,
+                wid, heterogeneity, heterogeneity_mode, train=False)
             rewards.append(reward)
             total_steps += steps
     return float(np.mean(rewards)), float(np.std(rewards)), int(total_steps)
@@ -176,7 +188,8 @@ def main():
         optim.Adam(list(p.critic1.parameters()) + list(p.critic2.parameters()), lr=args.lr)
         for p in policies
     ]
-    actor_optimizers = [optim.Adam(p.actor.parameters(), lr=args.lr) for p in policies]
+    actor_lr = args.actor_lr if args.actor_lr > 0 else args.lr
+    actor_optimizers = [optim.Adam(p.actor.parameters(), lr=actor_lr) for p in policies]
     alpha_optimizers = [optim.Adam([p.log_alpha], lr=args.lr) for p in policies]
     buffers = [HybridReplayBuffer(args.buffer_size) for _ in range(args.num_workers)]
     critic_warmup_remaining = [
@@ -201,9 +214,15 @@ def main():
     best_actor_state = None
     rollback_count = 0
     scores = np.zeros(args.num_workers, dtype=np.float64)
+    evaluation_seed = (
+        args.evaluation_seed_base
+        if args.evaluation_seed_base >= 0
+        else args.seed + 70_000_003
+    )
     global_eval, global_eval_std, initial_eval_steps = _evaluate(
-        policies, args.env, args.max_episode_steps, args.seed + 70_000_003,
-        args.aggregation_eval_episodes)
+        policies, args.env, args.max_episode_steps, evaluation_seed,
+        args.aggregation_eval_episodes, args.client_heterogeneity,
+        args.client_heterogeneity_mode)
     total_steps += initial_eval_steps
     round_idx = 0
     communication_round = 0
@@ -219,7 +238,7 @@ def main():
                 policy, args.env, args.max_episode_steps, args.seed + round_idx * 10000 + wid,
                 wid, args.client_heterogeneity, args.client_heterogeneity_mode, train=True)
             worker_rewards.append(reward)
-            scores[wid] = 0.9 * scores[wid] + reward
+            scores[wid] = 0.9 * scores[wid] + 0.1 * reward
             total_steps += steps
             for item in transitions:
                 buffers[wid].add_rl_data(*item)
@@ -274,8 +293,9 @@ def main():
             for policy in policies:
                 _load_actor_state(policy, proposed_state)
             proposal_mean, proposal_std, proposal_eval_steps = _evaluate(
-                policies, args.env, args.max_episode_steps, args.seed + 70_000_003,
-                args.aggregation_eval_episodes)
+                policies, args.env, args.max_episode_steps, evaluation_seed,
+                args.aggregation_eval_episodes, args.client_heterogeneity,
+                args.client_heterogeneity_mode)
             total_steps += proposal_eval_steps
             if (
                 args.disable_deployment_rollback
@@ -295,8 +315,9 @@ def main():
             ]
         elif args.baseline_mode == 'independent_sac':
             proposal_mean, proposal_std, proposal_eval_steps = _evaluate(
-                policies, args.env, args.max_episode_steps, args.seed + 70_000_003,
-                args.aggregation_eval_episodes)
+                policies, args.env, args.max_episode_steps, evaluation_seed,
+                args.aggregation_eval_episodes, args.client_heterogeneity,
+                args.client_heterogeneity_mode)
             total_steps += proposal_eval_steps
             global_eval, global_eval_std = proposal_mean, proposal_std
 
@@ -307,8 +328,9 @@ def main():
         ):
             if not np.isfinite(proposal_mean):
                 proposal_mean, proposal_std, proposal_eval_steps = _evaluate(
-                    policies, args.env, args.max_episode_steps, args.seed + 70_000_003,
-                    args.aggregation_eval_episodes)
+                    policies, args.env, args.max_episode_steps, evaluation_seed,
+                    args.aggregation_eval_episodes, args.client_heterogeneity,
+                    args.client_heterogeneity_mode)
                 total_steps += proposal_eval_steps
             deploy_mean, deploy_std = global_eval, global_eval_std
             if deploy_mean >= best_eval:

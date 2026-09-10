@@ -76,6 +76,33 @@ def test_ea_manager_seed_reproduces_initial_population():
     ray.shutdown()
 
 
+def test_ea_manager_antithetic_init_is_centered_on_sac_actor():
+    ray.init(ignore_reinit_error=True, num_cpus=1)
+    info = get_env_info('Pendulum-v1')
+    template = build_model_template(
+        info['state_dim'], info['action_dim'], algorithm='SAC', seed=123)
+    manager = EAManager.remote(
+        population_size=5,
+        seed=17,
+        ga_config={
+            'actor_exclude_substrings': ('actor.log_std.',),
+            'mutation_scale_floor': 0.05,
+        },
+    )
+    ray.get(manager.initialize_population.remote(
+        template, 'anchor_antithetic', None, 0.12))
+    population = ray.get(manager.get_population_for_evaluation.remote())
+    mean_key = next(key for key in template if key.startswith('actor.mean.'))
+    log_std_key = next(key for key in template if key.startswith('actor.log_std.'))
+    assert np.array_equal(population[0]['weights'][mean_key], template[mean_key])
+    assert np.allclose(
+        population[1]['weights'][mean_key] + population[2]['weights'][mean_key],
+        2.0 * template[mean_key],
+    )
+    assert np.array_equal(population[1]['weights'][log_std_key], template[log_std_key])
+    ray.shutdown()
+
+
 def test_manager_evaluate_population():
     ray.init(ignore_reinit_error=True, num_cpus=2)
     info = get_env_info('Pendulum-v1')
