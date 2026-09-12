@@ -295,30 +295,70 @@ class EAManager:
         }
 
     def boost_diversity(self, immigrant_fraction: float = 0.15,
-                        mutation_rate: float = 0.25, mutation_strength: float = 0.15) -> int:
+                        mutation_rate: float = 0.25, mutation_strength: float = 0.15,
+                        restart_mode: str = 'random') -> int:
         if self._model_template is None:
             return 0
         from .utils.erl_re2_ga import b_mutate_inplace
 
+        restart_mode = str(restart_mode).lower()
+        if restart_mode not in ('random', 'archive_perturb'):
+            raise ValueError(f'Unsupported stagnation restart_mode={restart_mode}')
         n_imm = max(1, int(self.population_size * immigrant_fraction))
         cfg = Er2GaConfig(
             num_elitists=self.num_elitists,
             mutation_alpha=1.0,
             mutation_beta_frac=mutation_rate,
             mut_strength=mutation_strength,
-            prob_reset_and_super=0.1,
+            prob_reset_and_super=(
+                self.ga_config.prob_reset_and_super
+                if restart_mode == 'archive_perturb' else 0.1
+            ),
             actor_prefix=self.ga_config.actor_prefix,
             actor_exclude_substrings=self.ga_config.actor_exclude_substrings,
             mutation_scale_mode=self.ga_config.mutation_scale_mode,
             mutation_scale_floor=self.ga_config.mutation_scale_floor,
             mutate_bias=self.ga_config.mutate_bias,
         )
+        archive_anchor = (
+            self._elite_archive[0].weights
+            if restart_mode == 'archive_perturb' and self._elite_archive
+            else None
+        )
+        pair_noise: Dict[tuple, np.ndarray] = {}
+
+        def restart_weights(offset: int) -> Dict[str, np.ndarray]:
+            if archive_anchor is None:
+                return {
+                    key: self._np_rng.normal(0, 0.15, array.shape).astype(array.dtype)
+                    for key, array in self._model_template.items()
+                }
+            weights = {}
+            for key, anchor in archive_anchor.items():
+                base = np.array(anchor, copy=True)
+                evolvable = (
+                    key.startswith(self.ga_config.actor_prefix)
+                    and not any(
+                        token in key
+                        for token in self.ga_config.actor_exclude_substrings
+                    )
+                )
+                if evolvable:
+                    layer_rms = float(np.sqrt(np.mean(np.square(base, dtype=np.float64))))
+                    noise_std = float(mutation_strength) * max(
+                        self.ga_config.mutation_scale_floor, layer_rms)
+                    pair_key = (offset // 2, key)
+                    if pair_key not in pair_noise:
+                        pair_noise[pair_key] = self._np_rng.normal(
+                            0.0, noise_std, base.shape).astype(base.dtype)
+                    sign = 1.0 if offset % 2 == 0 else -1.0
+                    base += sign * pair_noise[pair_key]
+                weights[key] = base.astype(anchor.dtype, copy=False)
+            return weights
+
         replaced = 0
-        for ind in self.population[-n_imm:]:
-            ind.weights = {
-                key: self._np_rng.normal(0, 0.15, array.shape).astype(array.dtype)
-                for key, array in self._model_template.items()
-            }
+        for offset, ind in enumerate(self.population[-n_imm:]):
+            ind.weights = restart_weights(offset)
             self._clip_weights(ind.weights)
             ind.seed = int(self._np_rng.integers(0, 2**32))
             ind.fitness = 0.0

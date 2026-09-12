@@ -198,6 +198,9 @@ def parse_args():
                         help='Generations without RL eval improvement before diversity boost')
     parser.add_argument('--stagnation-min-delta', type=float, default=5.0,
                         help='Minimum eval_reward improvement to reset stagnation counter')
+    parser.add_argument('--stagnation-restart-mode', type=str, default='random',
+                        choices=['random', 'archive_perturb'],
+                        help='How low-fitness individuals are restarted after archive stagnation')
     parser.add_argument('--immigrant-fraction', type=float, default=0.15,
                         help='Fraction of population replaced on stagnation boost')
     parser.add_argument('--inject-noise', type=float, default=0.05,
@@ -314,6 +317,7 @@ def _setup_local_logger(args):
         'fed_score_scale': args.fed_score_scale,
         'stagnation_patience': args.stagnation_patience,
         'stagnation_min_delta': args.stagnation_min_delta,
+        'stagnation_restart_mode': args.stagnation_restart_mode,
         'immigrant_fraction': args.immigrant_fraction,
     }
     with open(os.path.join(run_dir, 'metadata.json'), 'w', encoding='utf-8') as f:
@@ -702,7 +706,8 @@ def _run_fed_evo_rl(args, env_info, metrics_path):
             and stagnation_count >= args.stagnation_patience
         ):
             stagnation_boost = ray.get(manager.boost_diversity.remote(
-                args.immigrant_fraction, 0.35, 0.12))
+                args.immigrant_fraction, 0.35, 0.12,
+                args.stagnation_restart_mode))
             ray.get(manager.restore_elite_archive.remote(args.elite_archive_restore_copies))
             stagnation_count = 0
         eval_reward_history.append(deployable_eval_mean)

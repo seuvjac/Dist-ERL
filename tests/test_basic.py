@@ -141,6 +141,49 @@ def test_federated_soft_migration_updates_multiple_non_elites():
     ray.shutdown()
 
 
+def test_archive_centered_stagnation_restart_is_antithetic():
+    ray.init(ignore_reinit_error=True, num_cpus=1)
+    info = get_env_info('Pendulum-v1')
+    template = build_model_template(
+        info['state_dim'], info['action_dim'], algorithm='SAC', seed=123)
+    manager = EAManager.remote(
+        population_size=6,
+        elite_fraction=0.2,
+        num_elitists=1,
+        seed=17,
+        ga_config={
+            'actor_exclude_substrings': ('actor.log_std.',),
+            'mutation_scale_mode': 'layer_rms',
+            'mutation_scale_floor': 0.03,
+            'mutate_bias': True,
+        },
+    )
+    ray.get(manager.initialize_population.remote(
+        template, 'anchor_antithetic', None, 0.1))
+    ray.get(manager.update_fitness.remote([
+        {'id': idx, 'fitness': float(idx)} for idx in range(6)
+    ]))
+    ray.get(manager.update_elite_archive.remote(2))
+    archive = ray.get(manager.get_elite_individuals.remote(1))[0]['weights']
+
+    replaced = ray.get(manager.boost_diversity.remote(
+        0.34, 0.35, 0.12, 'archive_perturb'))
+    population = ray.get(manager.get_population_for_evaluation.remote())
+    restarted_a = population[-2]['weights']
+    restarted_b = population[-1]['weights']
+    mean_key = next(key for key in template if key.startswith('actor.mean.') and key.endswith('weight'))
+    log_std_key = next(key for key in template if key.startswith('actor.log_std.'))
+
+    assert replaced == 2
+    assert np.allclose(
+        restarted_a[mean_key] + restarted_b[mean_key],
+        2.0 * archive[mean_key],
+    )
+    assert np.array_equal(restarted_a[log_std_key], archive[log_std_key])
+    assert np.array_equal(restarted_b[log_std_key], archive[log_std_key])
+    ray.shutdown()
+
+
 def test_learner_warm_start_actor_from_elite():
     ray.init(ignore_reinit_error=True, num_cpus=1)
     info = get_env_info('Pendulum-v1')
