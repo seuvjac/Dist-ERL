@@ -187,6 +187,9 @@ def _apply_classic_control_heterogeneity(
         'Swimmer-v5',
         'Reacher-v5',
         'Walker2d-v5',
+        'InvertedPendulum-v5',
+        'HumanoidStandup-v5',
+        'Humanoid-v5',
     ):
         scale_boost = 1.8 if mode == 'mixed' else 1.0
         if hasattr(base, 'model'):

@@ -109,11 +109,13 @@ FEDRL_HETEROGENEOUS_ENVS = [
 ]
 
 FEDRL_CONTINUOUS_ENVS = [
-    'Ant-v5',
     'HalfCheetah-v5',
     'Swimmer-v5',
     'Walker2d-v5',
     'Hopper-v5',
+    'InvertedPendulum-v5',
+    'Reacher-v5',
+    'HumanoidStandup-v5',
 ]
 
 FEDRL_HETEROGENEITY_SCENARIOS = {
@@ -192,6 +194,14 @@ def env_run_preset(env_id: str) -> dict:
         'Reacher-v5': {
             'population_size': 20, 'num_workers': 3,
             'max_generations': 80, 'max_episode_steps': 50,
+        },
+        'InvertedPendulum-v5': {
+            'population_size': 10, 'num_workers': 3,
+            'max_generations': 80, 'max_episode_steps': 1000,
+        },
+        'HumanoidStandup-v5': {
+            'population_size': 10, 'num_workers': 3,
+            'max_generations': 80, 'max_episode_steps': 1000,
         },
         'Walker2d-v5': {
             'population_size': 24, 'num_workers': 4,
